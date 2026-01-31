@@ -150,12 +150,6 @@ void matrix_task(void *pvParameters) {
 
         if (sponsorState != SPONSOR_IDLE) {
             // --- SPONSOR DISPLAY LOGIC ---
-            // Draw Green Pulsing Border
-            pulseIdx += 0.3; // Faster pulse
-            uint8_t p = 150 + (int)(100 * sin(pulseIdx));
-            uint16_t pColor = matrix->color565(0, p, 0); // Green
-            canvas_dev->drawRect(0, 0, 256, 64, pColor);
-            canvas_dev->drawRect(1, 1, 254, 62, pColor);
 
             if (sponsorState == SPONSOR_INTRO) {
                 // Static Header
@@ -180,7 +174,7 @@ void matrix_task(void *pvParameters) {
                 if (nowMs - sponsorWaitStart > 2000) {
                      sponsorState = SPONSOR_SHOW_LIST;
                      sponsorListIdx = 0;
-                     sponsorListY = 64;
+                     sponsorListY = 90; // Start completely off screen
                      sponsorWaitStart = 0;
                 }
             }
@@ -215,7 +209,7 @@ void matrix_task(void *pvParameters) {
                     }
 
                     int totalHeight = lines.size() * 25; // approx height with spacing
-                    float targetY = 35 + (totalHeight / 2); // Center in remaining space
+                    float targetY = 40; // Fixed baseline "just under" header
 
                     if (sponsorWaitStart == 0) {
                         // Scrolling up
@@ -234,7 +228,7 @@ void matrix_task(void *pvParameters) {
                              // Just scroll off top
                              if (sponsorListY < -50) {
                                  sponsorListIdx++;
-                                 sponsorListY = 64;
+                                 sponsorListY = 90;
                                  sponsorWaitStart = 0;
                              }
                         }
@@ -288,6 +282,13 @@ void matrix_task(void *pvParameters) {
                     canvas_dev->print(thanks.c_str());
                 }
             }
+
+            // Draw Green Pulsing Border LAST (on top of everything)
+            pulseIdx += 0.3; // Faster pulse
+            uint8_t p = 150 + (int)(100 * sin(pulseIdx));
+            uint16_t pColor = matrix->color565(0, p, 0); // Green
+            canvas_dev->drawRect(0, 0, 256, 64, pColor);
+            canvas_dev->drawRect(1, 1, 254, 62, pColor);
         }
 
         // Only run normal logic if IDLE
