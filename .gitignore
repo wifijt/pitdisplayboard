@@ -40,3 +40,7 @@ python_env/
 # -------------
 .DS_Store
 Thumbs.db
+
+# Secrets
+# -------
+main/config.h
