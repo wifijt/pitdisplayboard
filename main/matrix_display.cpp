@@ -64,21 +64,20 @@ void refreshTickerQueue() {
 
     // If year > 2020, we know NTP has synced
     if (timeinfo.tm_year > 120) {
-        struct tm target;
-        memset(&target, 0, sizeof(struct tm));
-        target.tm_year = 2026 - 1900;
-        target.tm_mon = 1;  // February (0-indexed is Jan, so 1 is Feb)
-        target.tm_mday = 21; // Week 0 Date
+        if (nextEventDate > 0) {
+            double diff = difftime(nextEventDate, now);
+            int days = (int)(diff / 86400);
 
-        double diff = difftime(mktime(&target), now);
-        int days = (int)(diff / 86400);
-
-        if (days > 0) {
-            tickerQueue.push_back(std::string(MSG_WEEK0_PREFIX) + std::to_string(days) + MSG_WEEK0_SUFFIX);
-        } else if (days == 0) {
-            tickerQueue.push_back(MSG_WEEK0_NOW);
+            if (days > 0) {
+                tickerQueue.push_back("T-" + std::to_string(days) + " DAYS UNTIL " + nextEventName);
+            } else if (days == 0) {
+                tickerQueue.push_back("IT IS TIME FOR " + nextEventName + "!");
+            } else {
+                tickerQueue.push_back(MSG_SEASON_START);
+            }
         } else {
-            tickerQueue.push_back(MSG_SEASON_START);
+            // Fallback if no event found yet
+            tickerQueue.push_back("CHECKING SCHEDULE...");
         }
     } else {
         tickerQueue.push_back(MSG_WAIT_SYNC);

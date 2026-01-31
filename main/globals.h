@@ -73,4 +73,8 @@ extern uint32_t powerStartTime;
 extern GhostState ghostState[4];
 extern uint32_t winStartTime;
 
+// Event Schedule
+extern std::string nextEventName;
+extern time_t nextEventDate;
+
 #endif // GLOBALS_H

@@ -56,6 +56,10 @@ uint32_t lastBorderStartTime = 0;
 GhostState ghostState[4] = {GHOST_ALIVE, GHOST_ALIVE, GHOST_ALIVE, GHOST_ALIVE};
 uint32_t winStartTime = 0;
 
+// Event Schedule
+std::string nextEventName = "";
+time_t nextEventDate = 0;
+
 
 void setup_networking() {
     // 1. Initialize NVS (Required for WiFi storage)
