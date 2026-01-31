@@ -59,7 +59,21 @@ static void drawPac(GFXcanvas16 *canvas, int x, int y, float p, float currentSpe
     }
 }
 
-static void drawGhost(GFXcanvas16 *canvas, int x, int y, uint16_t color, bool scared, float p, float speed) {
+static void drawGhost(GFXcanvas16 *canvas, int x, int y, uint16_t color, bool scared, float p, float speed, GhostState state) {
+    if (state == GHOST_DEAD) return;
+
+    // Decide if drawing Eyes only
+    if (state == GHOST_EYES) {
+        for(int i=0; i<7; i++) {
+            for(int j=0; j<7; j++) {
+                uint8_t pixel = ghost_eyes[i][j];
+                if (pixel == 2) canvas->drawPixel(x+j, y+i, 0xFFFF);
+                else if (pixel == 3) canvas->drawPixel(x+j, y+i, 0x001F);
+            }
+        }
+        return;
+    }
+
     bool movingForward = (speed > 0);
     // Determine direction same as Pac-Man
     int dir;
@@ -86,45 +100,81 @@ static void drawGhost(GFXcanvas16 *canvas, int x, int y, uint16_t color, bool sc
     }
 }
 
-static void update_pacman_border(GFXcanvas16 *canvas, float &pPos, float gPosArr[4], bool &pMode, float speed, bool eaten[4]) {
+static void update_pacman_border(GFXcanvas16 *canvas, float &pPos, float gPosArr[4], bool &pMode, float speed, GhostState gState[4]) {
     uint16_t ghostCols[4] = {GHOST_BLINKY, GHOST_PINKY, GHOST_INKY, GHOST_CLYDE};
     // Note: We use 616.0f directly in fmod below, so perimeter variable isn't strictly needed here
     bool movingForward = (speed > 0);
 
-    // Update Pac-Man
-    pPos = fmod(pPos + speed, 616.0f);
-    if (pPos < 0) pPos += 616.0f;
+    // Update Pac-Man only if not won yet
+    if (winStartTime == 0) {
+        pPos = fmod(pPos + speed, 616.0f);
+        if (pPos < 0) pPos += 616.0f;
+    }
 
     int pax, pay; getPos(pPos, pax, pay);
     drawPac(canvas, pax - 3, pay - 3, pPos, speed);
 
     // Update Ghosts
     for (int i = 0; i < 4; i++) {
-        if (eaten[i]) continue; // Skip if Pac-Man ate them!
+        if (gState[i] == GHOST_DEAD) continue;
 
-        float gSpeed = pMode ? 0.8f : 1.6f;
-        gPosArr[i] = fmod(gPosArr[i] + (movingForward ? gSpeed : -gSpeed), 616.0f);
-        if (gPosArr[i] < 0) gPosArr[i] += 616.0f;
+        if (gState[i] == GHOST_ALIVE) {
+            float gSpeed = pMode ? 0.8f : 1.6f;
+            gPosArr[i] = fmod(gPosArr[i] + (movingForward ? gSpeed : -gSpeed), 616.0f);
+            if (gPosArr[i] < 0) gPosArr[i] += 616.0f;
+        }
+        else if (gState[i] == GHOST_EYES) {
+            // Move fast towards 0
+            // Assuming "backward" means towards 0 via decrement
+            gPosArr[i] -= 6.0f;
+            if (gPosArr[i] <= 0) {
+                gPosArr[i] = 0;
+                gState[i] = GHOST_DEAD;
+                continue;
+            }
+        }
 
         int gx, gy; getPos(gPosArr[i], gx, gy);
-        drawGhost(canvas, gx - 3, gy - 3, ghostCols[i], pMode, gPosArr[i], speed);
+        drawGhost(canvas, gx - 3, gy - 3, ghostCols[i], pMode, gPosArr[i], speed, gState[i]);
     }
 }
 
 void reset_pacman_game(uint32_t nowMs) {
     borderActive = true;
     lastBorderStartTime = nowMs;
+    winStartTime = 0;
     pacPos = 0; // Start at Top-Left
     for(int i=0; i<4; i++) {
         ghostPos[i] = 100 + (i * 20); // Reset ghosts
-        ghostEaten[i] = false;
+        ghostState[i] = GHOST_ALIVE;
     }
 }
 
 void run_pacman_cycle(GFXcanvas16 *canvas, uint32_t nowMs) {
+
+    // WIN SEQUENCE
+    if (winStartTime != 0) {
+        if (nowMs - winStartTime > 4000) {
+            borderActive = false; // End game
+            powerMode = false;
+            lastBorderStartTime = nowMs;
+            winStartTime = 0;
+        } else {
+            // Win Pulse (White/Black)
+            float p = (nowMs % 500) / 500.0f; // 0.5s cycle
+            uint16_t wColor = (p < 0.5f) ? 0xFFFF : 0x0000;
+            canvas->drawRect(0, 0, 256, 64, wColor);
+            canvas->drawRect(1, 1, 254, 62, wColor);
+
+            // Draw static characters
+            update_pacman_border(canvas, pacPos, ghostPos, powerMode, worldSpeed, ghostState);
+        }
+        return; // Skip normal update
+    }
+
     // 1. COLLISION DETECTION
     for (int i = 0; i < 4; i++) {
-        if (ghostEaten[i]) continue;
+        if (ghostState[i] != GHOST_ALIVE) continue;
 
         // Check distance between Pac-Man and Ghost
         float dist = std::abs(pacPos - ghostPos[i]);
@@ -133,29 +183,26 @@ void run_pacman_cycle(GFXcanvas16 *canvas, uint32_t nowMs) {
 
         if (dist < 8) { // Collision!
             if (powerMode) {
-                ghostEaten[i] = true; // Pac-Man eats ghost
+                ghostState[i] = GHOST_EYES; // Turn into eyes
             } else {
                 borderActive = false; // Ghost eats Pac-Man -> Game Over
                 lastBorderStartTime = nowMs; // RESET TIMER ON DEATH
-                // (Optional) Add a small "death" delay or effect here
             }
         }
     }
-    // 1.5 Check if all ghosts are gone
-    bool allEaten = true;
+    // 1.5 Check if all ghosts are gone (DEAD)
+    bool allDead = true;
     for (int i = 0; i < 4; i++) {
-        if (!ghostEaten[i]) {
-            allEaten = false;
+        if (ghostState[i] != GHOST_DEAD) {
+            allDead = false;
             break;
         }
     }
 
-    if (allEaten) {
-        borderActive = false; // End game and return to pulsing border
-        // Optional: Reset powerMode so it doesn't carry over to the next game
-        powerMode = false;
-        lastBorderStartTime = nowMs; // RESET TIMER ON DEATH
+    if (allDead && winStartTime == 0) {
+        winStartTime = nowMs; // Trigger Win Sequence
     }
+
     // 2. POWER PELLET CORNERS (Same as before)
     if (!powerMode) {
         if (std::abs((int)pacPos - 0) < 5 || std::abs((int)pacPos - 250) < 5 ||
@@ -170,5 +217,5 @@ void run_pacman_cycle(GFXcanvas16 *canvas, uint32_t nowMs) {
     }
 
     // 3. DRAWING
-    update_pacman_border(canvas, pacPos, ghostPos, powerMode, worldSpeed, ghostEaten);
+    update_pacman_border(canvas, pacPos, ghostPos, powerMode, worldSpeed, ghostState);
 }

@@ -36,9 +36,9 @@ GameScore matchHistory[12];
 int matchesCompleted = 0;
 
 MatchEntry schedule[3] = {
-    {'Q', 42, 0xF800}, // Next
-    {'Q', 51, 0x001F}, // Following
-    {'Q', 68, 0xF800}  // Final scheduled
+    {'Q', 42, 0xF800, 0}, // Next
+    {'Q', 51, 0x001F, 0}, // Following
+    {'Q', 68, 0xF800, 0}  // Final scheduled
 };
 
 int currentlyPlaying = 39;
@@ -53,7 +53,12 @@ bool powerMode = false;
 uint32_t powerStartTime = 0;
 bool borderActive = false;
 uint32_t lastBorderStartTime = 0;
-bool ghostEaten[4] = {false, false, false, false};
+GhostState ghostState[4] = {GHOST_ALIVE, GHOST_ALIVE, GHOST_ALIVE, GHOST_ALIVE};
+uint32_t winStartTime = 0;
+
+// Event Schedule
+std::string nextEventName = "";
+time_t nextEventDate = 0;
 
 
 void setup_networking() {
