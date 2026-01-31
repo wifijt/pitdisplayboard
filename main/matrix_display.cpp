@@ -15,6 +15,31 @@
 #include "esp_system.h"
 #include <time.h>
 #include <math.h>
+#include "sponsors.h"
+
+enum SponsorState {
+    SPONSOR_IDLE,
+    SPONSOR_INTRO,
+    SPONSOR_LIST,
+    SPONSOR_OUTRO
+};
+
+bool isSafeForSponsors() {
+    time_t now;
+    time(&now);
+
+    // Check against schedule
+    for (int i = 0; i < 3; i++) {
+        if (schedule[i].estTime != 0) {
+            double diff = difftime(schedule[i].estTime, now);
+            // "within 30 min of a match" -> -30min to +30min (approx)
+            // If match is 10 mins ago, diff is -600.
+            // If match is 10 mins in future, diff is 600.
+            if (fabs(diff) < 30 * 60) return false;
+        }
+    }
+    return true;
+}
 
 void drawTiger(GFXcanvas16 *canvas, int x, int y) {
     for (int row = 0; row < 64; row++) {
@@ -93,9 +118,123 @@ void matrix_task(void *pvParameters) {
     uint32_t lastRotationTime = 0;
     bool showUpcoming = true; // Toggle between Schedule and Stats
 
+    // Sponsor Logic Variables
+    SponsorState sponsorState = SPONSOR_IDLE;
+    time_t lastSponsorRunTime = 0;
+    float sponsorScrollX = 256;
+    unsigned int sponsorListIdx = 0;
+    uint32_t sponsorWaitStart = 0; // ms
+    float sponsorListY = 64;
+    uint32_t outroStartTime = 0;
+
+    // Initialize last run time to now so it doesn't run immediately on boot
+    time(&lastSponsorRunTime);
+
     while(1) {
         canvas_dev->fillScreen(0);
         uint32_t nowMs = esp_timer_get_time() / 1000;
+
+        // --- SPONSOR CHECK ---
+        if (sponsorState == SPONSOR_IDLE) {
+            time_t nowSec;
+            time(&nowSec);
+            if (difftime(nowSec, lastSponsorRunTime) >= 15 * 60) {
+                if (isSafeForSponsors()) {
+                    sponsorState = SPONSOR_INTRO;
+                    sponsorScrollX = 256;
+                    lastSponsorRunTime = nowSec;
+                }
+            }
+        }
+
+        if (sponsorState != SPONSOR_IDLE) {
+            // --- SPONSOR DISPLAY LOGIC ---
+            if (sponsorState == SPONSOR_INTRO) {
+                canvas_dev->setFont(&FreeSansBold12pt7b);
+                canvas_dev->setTextColor(0xFFFF);
+                canvas_dev->setCursor((int)sponsorScrollX, 40);
+                canvas_dev->print(SPONSOR_HEADER_TEXT);
+
+                int16_t x1, y1; uint16_t w, h;
+                canvas_dev->getTextBounds(SPONSOR_HEADER_TEXT, 0, 0, &x1, &y1, &w, &h);
+
+                sponsorScrollX -= 3.0; // Fast scroll
+                if (sponsorScrollX < -(w + 20)) {
+                    sponsorState = SPONSOR_LIST;
+                    sponsorListIdx = 0;
+                    sponsorListY = 64; // Start from bottom
+                    sponsorWaitStart = 0;
+                }
+            }
+            else if (sponsorState == SPONSOR_LIST) {
+                if (sponsorListIdx < SPONSOR_LIST.size()) {
+                    std::string name = SPONSOR_LIST[sponsorListIdx];
+                    canvas_dev->setFont(&FreeSansBold12pt7b);
+                    canvas_dev->setTextColor(0xFC00); // Orange-ish
+
+                    int16_t x1, y1; uint16_t w, h;
+                    canvas_dev->getTextBounds(name.c_str(), 0, 0, &x1, &y1, &w, &h);
+
+                    // Target Y is centered: 32 + h/2
+                    float targetY = 32 + (h / 2);
+
+                    if (sponsorWaitStart == 0) {
+                        // Scrolling up
+                        if (sponsorListY > targetY) {
+                            sponsorListY -= 2.0;
+                        } else {
+                            // Arrived
+                            sponsorListY = targetY;
+                            sponsorWaitStart = nowMs;
+                        }
+                    } else {
+                        // Waiting
+                        if (nowMs - sponsorWaitStart > 1000) {
+                             // Done waiting, move next
+                             sponsorListY -= 2.0;
+                             if (sponsorListY < -10) {
+                                 sponsorListIdx++;
+                                 sponsorListY = 64;
+                                 sponsorWaitStart = 0;
+                             }
+                        } else {
+                             // Still waiting, hold position
+                        }
+                    }
+
+                    // Draw Name (Centered Horizontally)
+                    int drawX = (256 - w) / 2;
+                    canvas_dev->setCursor(drawX, (int)sponsorListY);
+                    canvas_dev->print(name.c_str());
+
+                } else {
+                    sponsorState = SPONSOR_OUTRO;
+                    outroStartTime = nowMs;
+                }
+            }
+            else if (sponsorState == SPONSOR_OUTRO) {
+                float progress = (nowMs - outroStartTime) / 1000.0f; // seconds
+                if (progress > 4.0f) {
+                    sponsorState = SPONSOR_IDLE;
+                } else {
+                    // Pulse Logic
+                    // float scale = 1.0f + 0.3f * sin(progress * 5.0f);
+                    canvas_dev->setFont(&FreeSansBold18pt7b);
+                    uint16_t color = (fmod(progress, 0.5f) < 0.25f) ? 0xFFFF : 0xFC00;
+                    canvas_dev->setTextColor(color);
+
+                    std::string thanks = "THANK YOU!!";
+                    int16_t x1, y1; uint16_t w, h;
+                    canvas_dev->getTextBounds(thanks.c_str(), 0, 0, &x1, &y1, &w, &h);
+
+                    canvas_dev->setCursor((256 - w)/2, 45);
+                    canvas_dev->print(thanks.c_str());
+                }
+            }
+        }
+
+        // Only run normal logic if IDLE
+        if (sponsorState == SPONSOR_IDLE) {
 
         // --- 1. PANEL ROTATION TIMER (10 Seconds) ---
         if (nowMs - lastRotationTime > 7000) {
@@ -329,6 +468,7 @@ void matrix_task(void *pvParameters) {
             canvas_dev->drawRect(0, 0, 256, 64, pColor);
             canvas_dev->drawRect(1, 1, 254, 62, pColor);
         }
+        } // End of sponsorState == SPONSOR_IDLE check
 
         // --- D. FINAL RENDER ---
         uint16_t *buf = canvas_dev->getBuffer();

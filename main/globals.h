@@ -4,6 +4,7 @@
 #include <vector>
 #include <string>
 #include <stdint.h>
+#include <time.h>
 #include "ESP32-HUB75-MatrixPanel-I2S-DMA.h"
 #include "Adafruit_GFX.h"
 
@@ -18,6 +19,7 @@ struct MatchEntry {
     char type;    // 'Q' or 'P'
     int number;
     uint16_t color; // 0xF800 (Red) or 0x001F (Blue)
+    time_t estTime; // Estimated match time (Unix timestamp)
 };
 
 struct GameScore {

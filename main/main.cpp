@@ -36,9 +36,9 @@ GameScore matchHistory[12];
 int matchesCompleted = 0;
 
 MatchEntry schedule[3] = {
-    {'Q', 42, 0xF800}, // Next
-    {'Q', 51, 0x001F}, // Following
-    {'Q', 68, 0xF800}  // Final scheduled
+    {'Q', 42, 0xF800, 0}, // Next
+    {'Q', 51, 0x001F, 0}, // Following
+    {'Q', 68, 0xF800, 0}  // Final scheduled
 };
 
 int currentlyPlaying = 39;
