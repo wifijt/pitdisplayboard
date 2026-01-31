@@ -25,10 +25,16 @@ static time_t parse_date(const char* date_str) {
 }
 
 static void parse_tba_events(const char *json_string) {
+    printf("TBA DEBUG: Parsing Events JSON...\n");
     cJSON *root = cJSON_Parse(json_string);
-    if (root == NULL) return;
+    if (root == NULL) {
+        printf("TBA DEBUG: JSON Parse Failed\n");
+        return;
+    }
 
     int event_count = cJSON_GetArraySize(root);
+    printf("TBA DEBUG: Found %d events\n", event_count);
+
     time_t now;
     time(&now);
     time_t min_diff = -1;
@@ -40,12 +46,15 @@ static void parse_tba_events(const char *json_string) {
 
         if (date_item && city_item) {
             time_t evt_time = parse_date(date_item->valuestring);
+            printf("TBA DEBUG: Event %d Date: %s Parsed: %ld Now: %ld\n", i, date_item->valuestring, (long)evt_time, (long)now);
+
             if (evt_time > now) {
                 double diff = difftime(evt_time, now);
                 if (min_diff == -1 || diff < min_diff) {
                     min_diff = (time_t)diff;
                     nextEventDate = evt_time;
                     nextEventName = std::string(city_item->valuestring); // Use City name
+                    printf("TBA DEBUG: Selected Next Event: %s\n", nextEventName.c_str());
                 }
             }
         }
@@ -131,17 +140,44 @@ void tba_api_task(void *pvParameters) {
             esp_http_client_set_header(client, "X-TBA-Auth-Key", TBA_KEY);
 
             err = esp_http_client_perform(client);
-            if (err == ESP_OK && esp_http_client_get_status_code(client) == 200) {
+            int status = esp_http_client_get_status_code(client);
+            printf("TBA TASK: Event Fetch Status = %d\n", status);
+
+            if (err == ESP_OK && status == 200) {
                 int len = esp_http_client_get_content_length(client);
-                char *buffer = (char*)malloc(len + 1);
-                if (buffer) {
-                    esp_http_client_read_response(client, buffer, len);
-                    buffer[len] = '\0';
-                    parse_tba_events(buffer);
-                    free(buffer);
+                printf("TBA TASK: Content Length = %d\n", len);
+
+                if (len > 0) {
+                    char *buffer = (char*)malloc(len + 1);
+                    if (buffer) {
+                        int read_len = esp_http_client_read_response(client, buffer, len);
+                        if (read_len > 0) {
+                            buffer[read_len] = '\0';
+                            parse_tba_events(buffer);
+                        } else {
+                            printf("TBA TASK: Read response failed or empty\n");
+                        }
+                        free(buffer);
+                    } else {
+                        printf("TBA TASK: Malloc failed\n");
+                    }
+                } else {
+                     // Chunked encoding or no content
+                     printf("TBA TASK: Zero/Unknown Content Length (Chunked?)\n");
+                     // Fallback: Read in chunks (simplified for now to fixed buffer)
+                     char *buffer = (char*)malloc(4096);
+                     if (buffer) {
+                         int read_len = esp_http_client_read_response(client, buffer, 4095);
+                         if (read_len > 0) {
+                             buffer[read_len] = '\0';
+                             printf("TBA TASK: Read %d bytes via fallback\n", read_len);
+                             parse_tba_events(buffer);
+                         }
+                         free(buffer);
+                     }
                 }
             } else {
-                printf("TBA TASK: Event Fetch failed\n");
+                printf("TBA TASK: Event Fetch failed or Status %d\n", status);
             }
             esp_http_client_cleanup(client);
 
