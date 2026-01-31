@@ -12,6 +12,34 @@
 #include <string.h>
 #include <time.h>
 
+struct ResponseData {
+    char* data;
+    int len;
+    int capacity;
+};
+
+static esp_err_t _http_event_handler(esp_http_client_event_t *evt) {
+    if (evt->event_id == HTTP_EVENT_ON_DATA) {
+        ResponseData* buf = (ResponseData*)evt->user_data;
+        if (buf) {
+            if (buf->len + evt->data_len + 1 > buf->capacity) {
+                int new_cap = buf->capacity + evt->data_len + 1024;
+                char* new_data = (char*)realloc(buf->data, new_cap);
+                if (new_data) {
+                    buf->data = new_data;
+                    buf->capacity = new_cap;
+                } else {
+                    return ESP_FAIL; // OOM
+                }
+            }
+            memcpy(buf->data + buf->len, evt->data, evt->data_len);
+            buf->len += evt->data_len;
+            buf->data[buf->len] = 0; // Null terminate
+        }
+    }
+    return ESP_OK;
+}
+
 static time_t parse_date(const char* date_str) {
     struct tm tm = {0};
     if (sscanf(date_str, "%d-%d-%d", &tm.tm_year, &tm.tm_mon, &tm.tm_mday) == 3) {
@@ -113,32 +141,36 @@ void tba_api_task(void *pvParameters) {
             config.crt_bundle_attach = esp_crt_bundle_attach;
             config.timeout_ms = 40000;
 
+            // 1. Fetch Match Data
+            ResponseData matchBuf = { (char*)malloc(1024), 0, 1024 };
+            if (matchBuf.data) matchBuf.data[0] = 0;
+
+            config.event_handler = _http_event_handler;
+            config.user_data = &matchBuf;
+
             esp_http_client_handle_t client = esp_http_client_init(&config);
             esp_http_client_set_header(client, "X-TBA-Auth-Key", TBA_KEY);
 
-            // 1. Fetch Match Data
             esp_err_t err = esp_http_client_perform(client);
             if (err == ESP_OK && esp_http_client_get_status_code(client) == 200) {
-                int len = esp_http_client_get_content_length(client);
-                char *buffer = (char*)malloc(len + 1);
-                if (buffer) {
-                    esp_http_client_read_response(client, buffer, len);
-                    buffer[len] = '\0';
-                    parse_tba_json(buffer);
-                    free(buffer);
-                }
+                parse_tba_json(matchBuf.data);
             } else {
-                printf("TBA TASK: Match Fetch failed\n");
+                printf("TBA TASK: Match Fetch failed (Status %d)\n", esp_http_client_get_status_code(client));
             }
-            // Cleanup handle to re-use or reset (esp_http_client_cleanup is full destroy)
-            // Ideally we re-init or set URL. Re-init is safer given the simple config struct.
             esp_http_client_cleanup(client);
+            if (matchBuf.data) free(matchBuf.data);
 
-            // Brief pause to ensure socket cleanup
+            // Brief pause
             vTaskDelay(pdMS_TO_TICKS(2000));
 
             // 2. Fetch Event Data
+            ResponseData evtBuf = { (char*)malloc(4096), 0, 4096 };
+            if (evtBuf.data) evtBuf.data[0] = 0;
+
             config.url = "https://www.thebluealliance.com/api/v3/team/frc5459/events/2026/simple";
+            config.event_handler = _http_event_handler;
+            config.user_data = &evtBuf;
+
             client = esp_http_client_init(&config);
             esp_http_client_set_header(client, "X-TBA-Auth-Key", TBA_KEY);
 
@@ -147,42 +179,13 @@ void tba_api_task(void *pvParameters) {
             printf("TBA TASK: Event Fetch Status = %d\n", status);
 
             if (err == ESP_OK && status == 200) {
-                int len = esp_http_client_get_content_length(client);
-                printf("TBA TASK: Content Length = %d\n", len);
-
-                if (len > 0) {
-                    char *buffer = (char*)malloc(len + 1);
-                    if (buffer) {
-                        int read_len = esp_http_client_read_response(client, buffer, len);
-                        if (read_len > 0) {
-                            buffer[read_len] = '\0';
-                            parse_tba_events(buffer);
-                        } else {
-                            printf("TBA TASK: Read response failed or empty\n");
-                        }
-                        free(buffer);
-                    } else {
-                        printf("TBA TASK: Malloc failed\n");
-                    }
-                } else {
-                     // Chunked encoding or no content
-                     printf("TBA TASK: Zero/Unknown Content Length (Chunked?)\n");
-                     // Fallback: Read in chunks (simplified for now to fixed buffer)
-                     char *buffer = (char*)malloc(4096);
-                     if (buffer) {
-                         int read_len = esp_http_client_read_response(client, buffer, 4095);
-                         if (read_len > 0) {
-                             buffer[read_len] = '\0';
-                             printf("TBA TASK: Read %d bytes via fallback\n", read_len);
-                             parse_tba_events(buffer);
-                         }
-                         free(buffer);
-                     }
-                }
+                printf("TBA TASK: Received %d bytes\n", evtBuf.len);
+                parse_tba_events(evtBuf.data);
             } else {
-                printf("TBA TASK: Event Fetch failed or Status %d\n", status);
+                printf("TBA TASK: Event Fetch failed\n");
             }
             esp_http_client_cleanup(client);
+            if (evtBuf.data) free(evtBuf.data);
 
             // Wait 5 minutes
             vTaskDelay(pdMS_TO_TICKS(300000));
