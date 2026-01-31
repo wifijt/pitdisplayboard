@@ -149,63 +149,114 @@ void matrix_task(void *pvParameters) {
 
         if (sponsorState != SPONSOR_IDLE) {
             // --- SPONSOR DISPLAY LOGIC ---
+            // Draw Green Pulsing Border
+            pulseIdx += 0.3; // Faster pulse
+            uint8_t p = 150 + (int)(100 * sin(pulseIdx));
+            uint16_t pColor = matrix->color565(0, p, 0); // Green
+            canvas_dev->drawRect(0, 0, 256, 64, pColor);
+            canvas_dev->drawRect(1, 1, 254, 62, pColor);
+
             if (sponsorState == SPONSOR_INTRO) {
-                canvas_dev->setFont(&FreeSansBold12pt7b);
+                // Static Header
+                canvas_dev->setFont(NULL);
                 canvas_dev->setTextColor(0xFFFF);
-                canvas_dev->setCursor((int)sponsorScrollX, 40);
-                canvas_dev->print(SPONSOR_HEADER_TEXT);
 
+                const char* header = SPONSOR_HEADER_TEXT;
                 int16_t x1, y1; uint16_t w, h;
-                canvas_dev->getTextBounds(SPONSOR_HEADER_TEXT, 0, 0, &x1, &y1, &w, &h);
+                // getTextBounds with NULL font works differently or not at all in some GFX versions,
+                // but default font is 6x8 pixels.
+                // Centering manually assuming 6px width per char
+                int len = strlen(header);
+                int w_guess = len * 6;
+                int startX = (256 - w_guess) / 2;
+                if (startX < 0) startX = 0;
 
-                sponsorScrollX -= 3.0; // Fast scroll
-                if (sponsorScrollX < -(w + 20)) {
-                    sponsorState = SPONSOR_SHOW_LIST;
-                    sponsorListIdx = 0;
-                    sponsorListY = 64; // Start from bottom
-                    sponsorWaitStart = 0;
+                canvas_dev->setCursor(startX, 5);
+                canvas_dev->print(header);
+
+                // Wait briefly then move to list
+                if (sponsorWaitStart == 0) sponsorWaitStart = nowMs;
+                if (nowMs - sponsorWaitStart > 2000) {
+                     sponsorState = SPONSOR_SHOW_LIST;
+                     sponsorListIdx = 0;
+                     sponsorListY = 64;
+                     sponsorWaitStart = 0;
                 }
             }
             else if (sponsorState == SPONSOR_SHOW_LIST) {
+                // Draw Header always
+                canvas_dev->setFont(NULL);
+                canvas_dev->setTextColor(0xFFFF);
+                const char* header = SPONSOR_HEADER_TEXT;
+                int len = strlen(header);
+                int w_guess = len * 6;
+                int startX = (256 - w_guess) / 2;
+                if (startX < 0) startX = 0;
+                canvas_dev->setCursor(startX, 5);
+                canvas_dev->print(header);
+
                 if (sponsorListIdx < SPONSOR_LIST.size()) {
                     std::string name = SPONSOR_LIST[sponsorListIdx];
                     canvas_dev->setFont(&FreeSansBold12pt7b);
                     canvas_dev->setTextColor(0xFC00); // Orange-ish
 
+                    // Basic Word Wrap Logic
+                    // 1. Check width
                     int16_t x1, y1; uint16_t w, h;
                     canvas_dev->getTextBounds(name.c_str(), 0, 0, &x1, &y1, &w, &h);
 
-                    // Target Y is centered: 32 + h/2
-                    float targetY = 32 + (h / 2);
+                    std::vector<std::string> lines;
+                    if (w > 250) {
+                        // Needs wrap. Simple split by finding middle space?
+                        // For simplicity, just split if too long.
+                        // Real wrapping requires parsing spaces.
+                        size_t splitPos = name.length() / 2;
+                        size_t spacePos = name.find(' ', splitPos);
+                         if (spacePos == std::string::npos) spacePos = name.find_last_of(' ', splitPos);
+
+                         if (spacePos != std::string::npos) {
+                             lines.push_back(name.substr(0, spacePos));
+                             lines.push_back(name.substr(spacePos + 1));
+                         } else {
+                             lines.push_back(name); // Can't split
+                         }
+                    } else {
+                        lines.push_back(name);
+                    }
+
+                    int totalHeight = lines.size() * 25; // approx height with spacing
+                    float targetY = 35 + (totalHeight / 2); // Center in remaining space
 
                     if (sponsorWaitStart == 0) {
-                        // Scrolling up
                         if (sponsorListY > targetY) {
                             sponsorListY -= 2.0;
                         } else {
-                            // Arrived
                             sponsorListY = targetY;
                             sponsorWaitStart = nowMs;
                         }
                     } else {
-                        // Waiting
                         if (nowMs - sponsorWaitStart > 1000) {
-                             // Done waiting, move next
                              sponsorListY -= 2.0;
                              if (sponsorListY < -10) {
                                  sponsorListIdx++;
                                  sponsorListY = 64;
                                  sponsorWaitStart = 0;
                              }
-                        } else {
-                             // Still waiting, hold position
                         }
                     }
 
-                    // Draw Name (Centered Horizontally)
-                    int drawX = (256 - w) / 2;
-                    canvas_dev->setCursor(drawX, (int)sponsorListY);
-                    canvas_dev->print(name.c_str());
+                    // Draw Lines
+                    int currentY = (int)sponsorListY;
+                    // Move up slightly if multi-line to center block
+                    if (lines.size() > 1) currentY -= (10 * (lines.size()-1));
+
+                    for (const auto& line : lines) {
+                        canvas_dev->getTextBounds(line.c_str(), 0, 0, &x1, &y1, &w, &h);
+                        int drawX = (256 - w) / 2;
+                        canvas_dev->setCursor(drawX, currentY);
+                        canvas_dev->print(line.c_str());
+                        currentY += 25; // Line height
+                    }
 
                 } else {
                     sponsorState = SPONSOR_OUTRO;
@@ -217,10 +268,9 @@ void matrix_task(void *pvParameters) {
                 if (progress > 4.0f) {
                     sponsorState = SPONSOR_IDLE;
                 } else {
-                    // Pulse Logic
-                    // float scale = 1.0f + 0.3f * sin(progress * 5.0f);
+                    // Static Thanks
                     canvas_dev->setFont(&FreeSansBold18pt7b);
-                    uint16_t color = (fmod(progress, 0.5f) < 0.25f) ? 0xFFFF : 0xFC00;
+                    uint16_t color = (fmod(progress, 0.5f) < 0.25f) ? 0xFFFF : 0x07E0; // White/Green flash
                     canvas_dev->setTextColor(color);
 
                     std::string thanks = "THANK YOU!!";
