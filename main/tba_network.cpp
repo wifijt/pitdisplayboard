@@ -36,16 +36,16 @@ static void parse_tba_events(const char *json_string) {
     for (int i = 0; i < event_count; i++) {
         cJSON *evt = cJSON_GetArrayItem(root, i);
         cJSON *date_item = cJSON_GetObjectItem(evt, "start_date");
-        cJSON *name_item = cJSON_GetObjectItem(evt, "name");
+        cJSON *city_item = cJSON_GetObjectItem(evt, "city");
 
-        if (date_item && name_item) {
+        if (date_item && city_item) {
             time_t evt_time = parse_date(date_item->valuestring);
             if (evt_time > now) {
                 double diff = difftime(evt_time, now);
                 if (min_diff == -1 || diff < min_diff) {
                     min_diff = (time_t)diff;
                     nextEventDate = evt_time;
-                    nextEventName = std::string(name_item->valuestring);
+                    nextEventName = std::string(city_item->valuestring); // Use City name
                 }
             }
         }
@@ -126,7 +126,7 @@ void tba_api_task(void *pvParameters) {
             esp_http_client_cleanup(client);
 
             // 2. Fetch Event Data
-            config.url = "http://www.thebluealliance.com/api/v3/team/frc5459/events/2026/simple";
+            config.url = "https://www.thebluealliance.com/api/v3/team/frc5459/events/2026/simple";
             client = esp_http_client_init(&config);
             esp_http_client_set_header(client, "X-TBA-Auth-Key", TBA_KEY);
 

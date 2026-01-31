@@ -69,9 +69,9 @@ void refreshTickerQueue() {
             int days = (int)(diff / 86400);
 
             if (days > 0) {
-                tickerQueue.push_back("T-" + std::to_string(days) + " DAYS UNTIL " + nextEventName);
+                tickerQueue.push_back("T-" + std::to_string(days) + " DAYS UNTIL " + nextEventName + " COMP");
             } else if (days == 0) {
-                tickerQueue.push_back("IT IS TIME FOR " + nextEventName + "!");
+                tickerQueue.push_back("IT IS TIME FOR " + nextEventName + " COMP!");
             } else {
                 tickerQueue.push_back(MSG_SEASON_START);
             }
