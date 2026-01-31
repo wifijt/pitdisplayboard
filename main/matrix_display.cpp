@@ -127,8 +127,9 @@ void matrix_task(void *pvParameters) {
     float sponsorListY = 64;
     uint32_t outroStartTime = 0;
 
-    // Initialize last run time to now so it doesn't run immediately on boot
+    // Initialize last run time to (now - 14.5 mins) so it runs 30 seconds after boot for testing
     time(&lastSponsorRunTime);
+    lastSponsorRunTime -= (15 * 60) - 30;
 
     while(1) {
         canvas_dev->fillScreen(0);
@@ -184,17 +185,6 @@ void matrix_task(void *pvParameters) {
                 }
             }
             else if (sponsorState == SPONSOR_SHOW_LIST) {
-                // Draw Header always
-                canvas_dev->setFont(NULL);
-                canvas_dev->setTextColor(0xFFFF);
-                const char* header = SPONSOR_HEADER_TEXT;
-                int len = strlen(header);
-                int w_guess = len * 6;
-                int startX = (256 - w_guess) / 2;
-                if (startX < 0) startX = 0;
-                canvas_dev->setCursor(startX, 5);
-                canvas_dev->print(header);
-
                 if (sponsorListIdx < SPONSOR_LIST.size()) {
                     std::string name = SPONSOR_LIST[sponsorListIdx];
                     canvas_dev->setFont(&FreeSansBold12pt7b);
@@ -228,16 +218,21 @@ void matrix_task(void *pvParameters) {
                     float targetY = 35 + (totalHeight / 2); // Center in remaining space
 
                     if (sponsorWaitStart == 0) {
+                        // Scrolling up
                         if (sponsorListY > targetY) {
                             sponsorListY -= 2.0;
                         } else {
+                            // Arrived
                             sponsorListY = targetY;
                             sponsorWaitStart = nowMs;
                         }
                     } else {
+                        // Waiting
                         if (nowMs - sponsorWaitStart > 1000) {
+                             // Done waiting, move next (up)
                              sponsorListY -= 2.0;
-                             if (sponsorListY < -10) {
+                             // Just scroll off top
+                             if (sponsorListY < -50) {
                                  sponsorListIdx++;
                                  sponsorListY = 64;
                                  sponsorWaitStart = 0;
@@ -257,6 +252,18 @@ void matrix_task(void *pvParameters) {
                         canvas_dev->print(line.c_str());
                         currentY += 25; // Line height
                     }
+
+                    // Draw Header ON TOP of scrolling text with black background
+                    canvas_dev->fillRect(0, 0, 256, 15, 0x0000); // Black box
+                    canvas_dev->setFont(NULL);
+                    canvas_dev->setTextColor(0xFFFF);
+                    const char* header = SPONSOR_HEADER_TEXT;
+                    int len = strlen(header);
+                    int w_guess = len * 6;
+                    int startX = (256 - w_guess) / 2;
+                    if (startX < 0) startX = 0;
+                    canvas_dev->setCursor(startX, 5);
+                    canvas_dev->print(header);
 
                 } else {
                     sponsorState = SPONSOR_OUTRO;
