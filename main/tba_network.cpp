@@ -126,7 +126,7 @@ void tba_api_task(void *pvParameters) {
             esp_http_client_cleanup(client);
 
             // 2. Fetch Event Data
-            config.url = "http://www.thebluealliance.com/api/v3/team/frc5459/events/2025/simple";
+            config.url = "http://www.thebluealliance.com/api/v3/team/frc5459/events/2026/simple";
             client = esp_http_client_init(&config);
             esp_http_client_set_header(client, "X-TBA-Auth-Key", TBA_KEY);
 
