@@ -24,7 +24,7 @@ static void parse_tba_json(const char *json_string) {
         if (!alliances) continue;
 
         cJSON *red = cJSON_GetObjectItem(alliances, "red");
-        cJSON *blue = cJSON_GetObjectItem(alliances, "blue");
+        // cJSON *blue = cJSON_GetObjectItem(alliances, "blue"); // Unused for now
 
         // We check if the score exists and is not -1 (unplayed)
         cJSON *rScoreObj = cJSON_GetObjectItem(red, "score");
