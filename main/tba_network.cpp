@@ -111,7 +111,7 @@ void tba_api_task(void *pvParameters) {
             // Using HTTP for now to avoid SSL certificate issues
             config.url = TBA_URL;
             config.crt_bundle_attach = esp_crt_bundle_attach;
-            config.timeout_ms = 10000;
+            config.timeout_ms = 40000;
 
             esp_http_client_handle_t client = esp_http_client_init(&config);
             esp_http_client_set_header(client, "X-TBA-Auth-Key", TBA_KEY);
@@ -133,6 +133,9 @@ void tba_api_task(void *pvParameters) {
             // Cleanup handle to re-use or reset (esp_http_client_cleanup is full destroy)
             // Ideally we re-init or set URL. Re-init is safer given the simple config struct.
             esp_http_client_cleanup(client);
+
+            // Brief pause to ensure socket cleanup
+            vTaskDelay(pdMS_TO_TICKS(2000));
 
             // 2. Fetch Event Data
             config.url = "https://www.thebluealliance.com/api/v3/team/frc5459/events/2026/simple";
