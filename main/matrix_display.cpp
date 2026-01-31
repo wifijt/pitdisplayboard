@@ -20,7 +20,7 @@
 enum SponsorState {
     SPONSOR_IDLE,
     SPONSOR_INTRO,
-    SPONSOR_LIST,
+    SPONSOR_SHOW_LIST,
     SPONSOR_OUTRO
 };
 
@@ -160,13 +160,13 @@ void matrix_task(void *pvParameters) {
 
                 sponsorScrollX -= 3.0; // Fast scroll
                 if (sponsorScrollX < -(w + 20)) {
-                    sponsorState = SPONSOR_LIST;
+                    sponsorState = SPONSOR_SHOW_LIST;
                     sponsorListIdx = 0;
                     sponsorListY = 64; // Start from bottom
                     sponsorWaitStart = 0;
                 }
             }
-            else if (sponsorState == SPONSOR_LIST) {
+            else if (sponsorState == SPONSOR_SHOW_LIST) {
                 if (sponsorListIdx < SPONSOR_LIST.size()) {
                     std::string name = SPONSOR_LIST[sponsorListIdx];
                     canvas_dev->setFont(&FreeSansBold12pt7b);
