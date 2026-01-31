@@ -57,6 +57,12 @@ extern int currentlyPlaying;
 extern LastMatchData lastMatch;
 
 // Pac-Man Game State
+enum GhostState {
+    GHOST_ALIVE,
+    GHOST_EYES,
+    GHOST_DEAD
+};
+
 extern bool borderActive;
 extern uint32_t lastBorderStartTime;
 extern float pacPos;
@@ -64,6 +70,7 @@ extern float ghostPos[4];
 extern float worldSpeed;
 extern bool powerMode;
 extern uint32_t powerStartTime;
-extern bool ghostEaten[4];
+extern GhostState ghostState[4];
+extern uint32_t winStartTime;
 
 #endif // GLOBALS_H

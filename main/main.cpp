@@ -53,7 +53,8 @@ bool powerMode = false;
 uint32_t powerStartTime = 0;
 bool borderActive = false;
 uint32_t lastBorderStartTime = 0;
-bool ghostEaten[4] = {false, false, false, false};
+GhostState ghostState[4] = {GHOST_ALIVE, GHOST_ALIVE, GHOST_ALIVE, GHOST_ALIVE};
+uint32_t winStartTime = 0;
 
 
 void setup_networking() {
