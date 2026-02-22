@@ -380,7 +380,7 @@ void matrix_task(void *pvParameters) {
         }
 
         // --- SPONSOR CHECK ---
-        if (sponsorState == SPONSOR_IDLE) {
+        if (sponsorState == SPONSOR_IDLE && !simState.active) {
             time_t nowSec = virtualNow;
             if (difftime(nowSec, lastSponsorRunTime) >= 15 * 60) {
                 if (isSafeForSponsors()) {

@@ -186,6 +186,17 @@ static void parse_all_matches(const char* json) {
     if (matchDataMutex != NULL) {
         if (xSemaphoreTake(matchDataMutex, pdMS_TO_TICKS(1000)) == pdTRUE) {
             allMatches = newMatches;
+
+            // SIMULATION INIT: If sim is active and time offset is 0, jump to start
+            if (simState.active && simState.time_offset == 0 && !allMatches.empty()) {
+                time_t firstMatch = allMatches[0].actual_time;
+                time_t now;
+                time(&now);
+                // Set virtual time to 5 minutes before the first match
+                simState.time_offset = (firstMatch - 300) - now;
+                printf("SIMULATION: Auto-jump to start. Offset: %ld\n", (long)simState.time_offset);
+            }
+
             xSemaphoreGive(matchDataMutex);
             printf("TBA: Updated allMatches with %d entries\n", allMatches.size());
         }
@@ -214,6 +225,8 @@ static void parse_team_status(const char* json) {
     cJSON *playoff = cJSON_GetObjectItem(root, "playoff");
     if (playoff && !cJSON_IsNull(playoff)) {
         // Check if we are eliminated or playing?
+        // Actually just presence implies we are in playoff phase logic if the event is there
+        // But better to check 'level'
         cJSON *level = cJSON_GetObjectItem(playoff, "level");
         if (level && strcmp(level->valuestring, "qm") != 0) {
              inPlayoffs = true;
