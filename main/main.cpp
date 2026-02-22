@@ -7,6 +7,7 @@
 #include <time.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
 #include "driver/gpio.h"
 #include "ESP32-HUB75-MatrixPanel-I2S-DMA.h"
 #include "Adafruit_GFX.h"
@@ -28,22 +29,21 @@
 
 // --- Global Variable Definitions ---
 std::vector<std::string> tickerQueue;
+std::vector<MatchData> allMatches;
+SemaphoreHandle_t matchDataMutex = NULL;
+MatchPhase currentPhase = PHASE_QUALS;
+
+// Simulation State
+SimState simState = {false, 0, 0};
+std::string teamKey = REAL_TEAM;
+std::string eventKey = REAL_EVENT;
+
+// Rank and Alliance
+int currentRank = 0;
+std::string allianceName = "";
 
 MatrixPanel_I2S_DMA *matrix = nullptr;
 GFXcanvas16 *canvas_dev = new GFXcanvas16(256, 64);
-
-GameScore matchHistory[12];
-int matchesCompleted = 0;
-
-MatchEntry schedule[3] = {
-    {'Q', 42, 0xF800, 0}, // Next
-    {'Q', 51, 0x001F, 0}, // Following
-    {'Q', 68, 0xF800, 0}  // Final scheduled
-};
-
-int currentlyPlaying = 39;
-
-LastMatchData lastMatch = {38, 124, 110, true, 3}; // Initialized with mock data
 
 // Pac-Man Game State
 float pacPos = 0;
@@ -60,6 +60,32 @@ uint32_t winStartTime = 0;
 std::string nextEventName = "";
 time_t nextEventDate = 0;
 
+// Button Handling
+#define DEBOUNCE_TIME 200 // ms
+uint32_t lastBtnPressTime = 0;
+
+time_t get_current_time() {
+    time_t now;
+    time(&now);
+    if (simState.active) {
+        return now + simState.time_offset;
+    }
+    return now;
+}
+
+static void wifi_event_handler(void* arg, esp_event_base_t event_base,
+                               int32_t event_id, void* event_data) {
+    if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
+        esp_wifi_connect();
+    } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
+        // Endless retry loop
+        esp_wifi_connect();
+        printf("WiFi Disconnected. Reconnecting...\n");
+    } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
+        ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
+        printf("Got IP: " IPSTR "\n", IP2CO2IP(&event->ip_info.ip));
+    }
+}
 
 void setup_networking() {
     // 1. Initialize NVS (Required for WiFi storage)
@@ -70,12 +96,16 @@ void setup_networking() {
     }
     ESP_ERROR_CHECK(ret);
 
-    // 2. THE AP RESET (GPIO 7 - Down Button)
-    // We do this BEFORE starting WiFi so we can wipe the slate clean
+    // 2. Buttons (GPIO 6 & 7)
+    // GPIO 7 is Down/Reset, GPIO 6 is Up
     gpio_reset_pin(GPIO_NUM_7);
     gpio_set_direction(GPIO_NUM_7, GPIO_MODE_INPUT);
     gpio_set_pull_mode(GPIO_NUM_7, GPIO_PULLUP_ONLY);
     
+    gpio_reset_pin(GPIO_NUM_6);
+    gpio_set_direction(GPIO_NUM_6, GPIO_MODE_INPUT);
+    gpio_set_pull_mode(GPIO_NUM_6, GPIO_PULLUP_ONLY);
+
     // 3. Init Network Stack
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
@@ -84,6 +114,19 @@ void setup_networking() {
 
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+
+    // Register Event Handler for Auto-Reconnect
+    ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT,
+                                                        ESP_EVENT_ANY_ID,
+                                                        &wifi_event_handler,
+                                                        NULL,
+                                                        NULL));
+    ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT,
+                                                        IP_EVENT_STA_GOT_IP,
+                                                        &wifi_event_handler,
+                                                        NULL,
+                                                        NULL));
+
 
     // 4. Define Hardcoded Credentials
     wifi_config_t static_wifi_config = {};
@@ -107,7 +150,7 @@ void setup_networking() {
         esp_wifi_set_mode(WIFI_MODE_STA);
         esp_wifi_set_config(WIFI_IF_STA, &static_wifi_config);
         esp_wifi_start();
-        esp_wifi_connect();
+        // connect is handled by event handler now
 
         // Wait 10 seconds to see if hardcoded works
         int retry = 0;
@@ -132,7 +175,7 @@ void setup_networking() {
         wifi_prov_mgr_stop_provisioning();
         esp_wifi_set_mode(WIFI_MODE_STA);
         esp_wifi_start();
-        esp_wifi_connect();
+        // connect is handled by event handler
     }
 
     // 6. Time Sync
@@ -143,6 +186,18 @@ void setup_networking() {
 }
 
 extern "C" void app_main(void) {
+    matchDataMutex = xSemaphoreCreateMutex();
+
+    // Check Config
+    #ifdef SIMULATION_MODE
+        if (SIMULATION_MODE) {
+            simState.active = true;
+            teamKey = SIM_TEAM;
+            eventKey = SIM_EVENT;
+            printf("Running in SIMULATION MODE: %s @ %s\n", teamKey.c_str(), eventKey.c_str());
+        }
+    #endif
+
     HUB75_I2S_CFG mxconfig(64, 64, 4);
     mxconfig.gpio.r1 = 42; mxconfig.gpio.g1 = 41; mxconfig.gpio.b1 = 40;
     mxconfig.gpio.r2 = 38; mxconfig.gpio.g2 = 39; mxconfig.gpio.b2 = 37;
@@ -152,8 +207,7 @@ extern "C" void app_main(void) {
     mxconfig.clkphase = false;
     mxconfig.latch_blanking = 4;
     mxconfig.i2sspeed = HUB75_I2S_CFG::HZ_8M;
-    addMatchResult(12, 15, 15, 45, 30, 5, 156, true, true);  // Great game
-    addMatchResult(24, 8, 0, 32, 20, 15, 98, false, false); // Rough game
+
     matrix = new MatrixPanel_I2S_DMA(mxconfig);
     if (matrix->begin()) {
         matrix->setBrightness8(60);

@@ -7,6 +7,7 @@
 #include <time.h>
 #include "ESP32-HUB75-MatrixPanel-I2S-DMA.h"
 #include "Adafruit_GFX.h"
+#include "freertos/semphr.h"
 
 // --- Constants & Colors ---
 #define GHOST_BLINKY 0xF800 // Red
@@ -15,11 +16,32 @@
 #define GHOST_CLYDE  0xFB20 // Orange
 
 // --- Data Structures ---
-struct MatchEntry {
-    char type;    // 'Q' or 'P'
-    int number;
-    uint16_t color; // 0xF800 (Red) or 0x001F (Blue)
-    time_t estTime; // Estimated match time (Unix timestamp)
+enum MatchPhase {
+    PHASE_QUALS,
+    PHASE_PLAYOFFS
+};
+
+struct MatchData {
+    std::string key;
+    std::string comp_level; // "qm", "sf", "f"
+    int match_number;
+    int set_number;
+    time_t actual_time; // Predicted or actual time
+
+    // Alliance Info
+    std::vector<std::string> red_teams;
+    std::vector<std::string> blue_teams;
+    int red_score;
+    int blue_score;
+
+    // For Playoffs: Which alliance are WE in? (0=None/Spec, 1=Red, 2=Blue)
+    int our_alliance; // 1 or 2
+};
+
+struct SimState {
+    bool active;
+    time_t time_offset; // Added to real time
+    int match_index_override; // For manual stepping if needed
 };
 
 struct GameScore {
@@ -34,14 +56,6 @@ struct GameScore {
     bool towerRP;
 };
 
-struct LastMatchData {
-    int matchNum;
-    int redScore;
-    int blueScore;
-    bool weWereRed;
-    int rpEarned;
-};
-
 // --- Shared Variables ---
 
 // Display Objects
@@ -50,11 +64,10 @@ extern GFXcanvas16 *canvas_dev;
 
 // Data Queues/History
 extern std::vector<std::string> tickerQueue;
-extern GameScore matchHistory[12];
-extern int matchesCompleted;
-extern MatchEntry schedule[3];
-extern int currentlyPlaying;
-extern LastMatchData lastMatch;
+extern std::vector<MatchData> allMatches; // Replaces old matchHistory/schedule arrays
+extern SemaphoreHandle_t matchDataMutex;
+extern MatchPhase currentPhase;
+extern SimState simState;
 
 // Pac-Man Game State
 enum GhostState {
@@ -76,5 +89,12 @@ extern uint32_t winStartTime;
 // Event Schedule
 extern std::string nextEventName;
 extern time_t nextEventDate;
+extern std::string teamKey;
+extern std::string eventKey;
+extern int currentRank;
+extern std::string allianceName; // e.g., "Alliance 1"
+
+// Helper Function for Time
+time_t get_current_time();
 
 #endif // GLOBALS_H
