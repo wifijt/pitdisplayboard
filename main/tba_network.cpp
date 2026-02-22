@@ -20,7 +20,6 @@
 #endif
 
 // --- Fallback for old TBA_KEY ---
-// The original code had TBA_KEY but user might have a local config that doesn't define it if they were using example
 #ifndef TBA_KEY
 #define TBA_KEY "YOUR_TBA_API_KEY_HERE"
 #endif
@@ -36,6 +35,14 @@ static esp_err_t _http_event_handler(esp_http_client_event_t *evt) {
     if (evt->event_id == HTTP_EVENT_ON_DATA) {
         ResponseData* buf = (ResponseData*)evt->user_data;
         if (buf) {
+            // Check for initial NULL data if malloc failed earlier (safety)
+            if (buf->data == NULL) {
+                // Try to allocate small chunk now? Or just fail?
+                // Let's try to alloc 1KB if it's NULL but capacity is set (weird state)
+                // Better to just fail safe.
+                return ESP_FAIL;
+            }
+
             if (buf->len + evt->data_len + 1 > buf->capacity) {
                 int new_cap = buf->capacity + evt->data_len + 1024;
                 char* new_data = (char*)realloc(buf->data, new_cap);
@@ -43,6 +50,7 @@ static esp_err_t _http_event_handler(esp_http_client_event_t *evt) {
                     buf->data = new_data;
                     buf->capacity = new_cap;
                 } else {
+                    printf("TBA: OOM Realloc Failed! (Cap: %d)\n", new_cap);
                     return ESP_FAIL; // OOM
                 }
             }
@@ -204,8 +212,6 @@ static void parse_team_status(const char* json) {
     cJSON *playoff = cJSON_GetObjectItem(root, "playoff");
     if (playoff && !cJSON_IsNull(playoff)) {
         // Check if we are eliminated or playing?
-        // Actually just presence implies we are in playoff phase logic if the event is there
-        // But better to check 'level'
         cJSON *level = cJSON_GetObjectItem(playoff, "level");
         if (level && strcmp(level->valuestring, "qm") != 0) {
              inPlayoffs = true;
@@ -218,10 +224,8 @@ static void parse_team_status(const char* json) {
         cJSON *name = cJSON_GetObjectItem(alliance, "name");
         if (name) {
             allianceName = std::string(name->valuestring);
-            // If we have an alliance name, we are definitely in playoffs or about to be
             inPlayoffs = true;
         }
-        // Removed 'cJSON *number' line to fix warning
     } else {
         allianceName = "";
     }
@@ -241,9 +245,17 @@ static void parse_team_status(const char* json) {
 void tba_api_task(void *pvParameters) {
     printf("TBA TASK: Started on Core %d\n", xPortGetCoreID());
 
-    // Buffer for responses
-    const int BUF_SIZE = 64 * 1024; // 64KB for full match list
-    ResponseData buf = { (char*)malloc(BUF_SIZE), 0, BUF_SIZE };
+    // START SMALL: 4KB instead of 64KB to avoid immediate OOM
+    const int INIT_BUF_SIZE = 4096;
+    ResponseData buf = { (char*)malloc(INIT_BUF_SIZE), 0, INIT_BUF_SIZE };
+
+    if (!buf.data) {
+        printf("TBA TASK: CRITICAL - Failed to allocate initial buffer!\n");
+        // We can't do much without memory. Delay and retry loop?
+        // Or just let it crash safely later.
+        // For now, let's delay loop.
+        while(1) { vTaskDelay(pdMS_TO_TICKS(10000)); }
+    }
 
     while (1) {
         // Check WiFi
@@ -253,21 +265,24 @@ void tba_api_task(void *pvParameters) {
         if (netif && esp_netif_get_ip_info(netif, &ip_info) == ESP_OK && ip_info.ip.addr != 0) {
 
             // 1. Fetch ALL Matches
-            // URL: /event/{eventKey}/matches/simple
             std::string matchUrl = std::string(TBA_URL_BASE) + "/event/" + eventKey + "/matches/simple";
-            buf.len = 0;
+            buf.len = 0; // Reset length, reuse buffer
+            // Ensure first byte is null terminated just in case
+            if(buf.data) buf.data[0] = 0;
+
             if (fetch_url(matchUrl.c_str(), &buf) == 0) {
-                parse_all_matches(buf.data);
+                if (buf.data) parse_all_matches(buf.data);
             }
 
             vTaskDelay(pdMS_TO_TICKS(2000));
 
             // 2. Fetch Team Status (Rank & Alliance)
-            // URL: /team/{teamKey}/event/{eventKey}/status
             std::string statusUrl = std::string(TBA_URL_BASE) + "/team/" + teamKey + "/event/" + eventKey + "/status";
             buf.len = 0;
+            if(buf.data) buf.data[0] = 0;
+
             if (fetch_url(statusUrl.c_str(), &buf) == 0) {
-                parse_team_status(buf.data);
+                if (buf.data) parse_team_status(buf.data);
             }
 
             // Sleep for 2 minutes (API rules say be nice)
