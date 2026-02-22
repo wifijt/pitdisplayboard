@@ -19,10 +19,14 @@
 #define TBA_URL_BASE "https://www.thebluealliance.com/api/v3"
 #endif
 
-// --- Fallback for old TBA_KEY ---
 #ifndef TBA_KEY
 #define TBA_KEY "YOUR_TBA_API_KEY_HERE"
 #endif
+
+// --- Fixed Buffer Strategy ---
+// 48KB should be sufficient for "matches/simple" even for large events.
+// Allocating this ONCE avoids heap fragmentation/OOM during realloc.
+#define JSON_BUF_SIZE (48 * 1024)
 
 struct ResponseData {
     char* data;
@@ -34,20 +38,14 @@ struct ResponseData {
 static esp_err_t _http_event_handler(esp_http_client_event_t *evt) {
     if (evt->event_id == HTTP_EVENT_ON_DATA) {
         ResponseData* buf = (ResponseData*)evt->user_data;
-        if (buf) {
-            if (buf->data == NULL) return ESP_FAIL;
-
+        if (buf && buf->data) {
+            // Check for Overflow
             if (buf->len + evt->data_len + 1 > buf->capacity) {
-                int new_cap = buf->capacity + evt->data_len + 1024;
-                char* new_data = (char*)realloc(buf->data, new_cap);
-                if (new_data) {
-                    buf->data = new_data;
-                    buf->capacity = new_cap;
-                } else {
-                    printf("TBA: OOM Realloc Failed! (Cap: %d)\n", new_cap);
-                    return ESP_FAIL; // OOM
-                }
+                printf("TBA: JSON Buffer Overflow! Needs > %d bytes\n", buf->capacity);
+                return ESP_FAIL;
             }
+
+            // Append Data
             memcpy(buf->data + buf->len, evt->data, evt->data_len);
             buf->len += evt->data_len;
             buf->data[buf->len] = 0; // Null terminate
@@ -84,6 +82,9 @@ static int fetch_url(const char* url, ResponseData* outBuf) {
 
 // --- Parse All Matches ---
 static void parse_all_matches(const char* json) {
+    // Safety check for empty JSON
+    if (json == NULL || strlen(json) < 2) return;
+
     cJSON *root = cJSON_Parse(json);
     if (root == NULL) {
         printf("TBA: JSON Parse Failed for Matches\n");
@@ -99,13 +100,12 @@ static void parse_all_matches(const char* json) {
     int count = cJSON_GetArraySize(root);
     printf("TBA: Found %d matches\n", count);
 
-    // Reserve to prevent reallocations
     newMatches.reserve(count);
 
     for (int i = 0; i < count; i++) {
         cJSON *m = cJSON_GetArrayItem(root, i);
         MatchData md;
-        memset(&md, 0, sizeof(MatchData)); // Clear struct
+        memset(&md, 0, sizeof(MatchData));
 
         cJSON *key = cJSON_GetObjectItem(m, "key");
         if (key && key->valuestring) strncpy(md.key, key->valuestring, sizeof(md.key)-1);
@@ -119,7 +119,6 @@ static void parse_all_matches(const char* json) {
         cJSON *set_number = cJSON_GetObjectItem(m, "set_number");
         md.set_number = set_number ? set_number->valueint : 0;
 
-        // Time logic: actual_time > predicted_time > time
         cJSON *actual_time = cJSON_GetObjectItem(m, "actual_time");
         cJSON *predicted_time = cJSON_GetObjectItem(m, "predicted_time");
         cJSON *time_item = cJSON_GetObjectItem(m, "time");
@@ -129,7 +128,6 @@ static void parse_all_matches(const char* json) {
         else if (time_item && time_item->valueint > 0) md.actual_time = time_item->valueint;
         else md.actual_time = 0;
 
-        // Alliances
         md.our_alliance = 0;
         cJSON *alliances = cJSON_GetObjectItem(m, "alliances");
         if (alliances) {
@@ -145,13 +143,12 @@ static void parse_all_matches(const char* json) {
                     for(int t=0; t<tCount && t<3; t++) {
                         cJSON* tItem = cJSON_GetArrayItem(teams, t);
                         if (tItem && tItem->valuestring) {
-                            strncpy(md.red_teams[t], tItem->valuestring, 7); // Safe limit
-                            if (strcmp(tItem->valuestring, teamKey.c_str()) == 0) md.our_alliance = 1; // Red
+                            strncpy(md.red_teams[t], tItem->valuestring, 7);
+                            if (strcmp(tItem->valuestring, teamKey.c_str()) == 0) md.our_alliance = 1;
                         }
                     }
                 }
             }
-
             // BLUE
             cJSON *blue = cJSON_GetObjectItem(alliances, "blue");
             if (blue) {
@@ -164,25 +161,22 @@ static void parse_all_matches(const char* json) {
                     for(int t=0; t<tCount && t<3; t++) {
                         cJSON* tItem = cJSON_GetArrayItem(teams, t);
                         if (tItem && tItem->valuestring) {
-                             strncpy(md.blue_teams[t], tItem->valuestring, 7); // Safe limit
-                             if (strcmp(tItem->valuestring, teamKey.c_str()) == 0) md.our_alliance = 2; // Blue
+                             strncpy(md.blue_teams[t], tItem->valuestring, 7);
+                             if (strcmp(tItem->valuestring, teamKey.c_str()) == 0) md.our_alliance = 2;
                         }
                     }
                 }
             }
         }
-
         newMatches.push_back(md);
     }
 
     cJSON_Delete(root);
 
-    // Sort by Time
     std::sort(newMatches.begin(), newMatches.end(), [](const MatchData& a, const MatchData& b) {
         return a.actual_time < b.actual_time;
     });
 
-    // Update Global with Mutex
     if (matchDataMutex != NULL) {
         if (xSemaphoreTake(matchDataMutex, pdMS_TO_TICKS(1000)) == pdTRUE) {
             allMatches = newMatches;
@@ -192,7 +186,6 @@ static void parse_all_matches(const char* json) {
                 time_t firstMatch = allMatches[0].actual_time;
                 time_t now;
                 time(&now);
-                // Set virtual time to 5 minutes before the first match
                 simState.time_offset = (firstMatch - 300) - now;
                 printf("SIMULATION: Auto-jump to start. Offset: %ld\n", (long)simState.time_offset);
             }
@@ -205,6 +198,7 @@ static void parse_all_matches(const char* json) {
 
 // --- Parse Team Status ---
 static void parse_team_status(const char* json) {
+    if (json == NULL || strlen(json) < 2) return;
     cJSON *root = cJSON_Parse(json);
     if (root == NULL) return;
 
@@ -224,9 +218,6 @@ static void parse_team_status(const char* json) {
     bool inPlayoffs = false;
     cJSON *playoff = cJSON_GetObjectItem(root, "playoff");
     if (playoff && !cJSON_IsNull(playoff)) {
-        // Check if we are eliminated or playing?
-        // Actually just presence implies we are in playoff phase logic if the event is there
-        // But better to check 'level'
         cJSON *level = cJSON_GetObjectItem(playoff, "level");
         if (level && strcmp(level->valuestring, "qm") != 0) {
              inPlayoffs = true;
@@ -260,16 +251,25 @@ static void parse_team_status(const char* json) {
 void tba_api_task(void *pvParameters) {
     printf("TBA TASK: Started on Core %d\n", xPortGetCoreID());
 
-    // START SMALL: 4KB instead of 64KB to avoid immediate OOM
-    const int INIT_BUF_SIZE = 4096;
-    ResponseData buf = { (char*)malloc(INIT_BUF_SIZE), 0, INIT_BUF_SIZE };
+    // FIXED BUFFER STRATEGY
+    // Allocate once, fail hard if we can't get it at startup.
+    // This prevents fragmentation loops.
+    ResponseData buf;
+    buf.data = (char*)malloc(JSON_BUF_SIZE);
+    buf.capacity = JSON_BUF_SIZE;
+    buf.len = 0;
 
     if (!buf.data) {
-        printf("TBA TASK: CRITICAL - Failed to allocate initial buffer!\n");
-        // We can't do much without memory. Delay and retry loop?
-        // Or just let it crash safely later.
-        while(1) { vTaskDelay(pdMS_TO_TICKS(10000)); }
+        printf("TBA TASK: CRITICAL - Failed to allocate %d bytes!\n", JSON_BUF_SIZE);
+        // Try smaller? 24KB?
+        buf.capacity = 24 * 1024;
+        buf.data = (char*)malloc(buf.capacity);
+        if (!buf.data) {
+             printf("TBA TASK: Fatal Memory Failure.\n");
+             vTaskDelete(NULL); // Die
+        }
     }
+    printf("TBA TASK: Allocated %d bytes buffer.\n", buf.capacity);
 
     while (1) {
         // Check WiFi
@@ -280,8 +280,7 @@ void tba_api_task(void *pvParameters) {
 
             // 1. Fetch ALL Matches
             std::string matchUrl = std::string(TBA_URL_BASE) + "/event/" + eventKey + "/matches/simple";
-            buf.len = 0; // Reset length, reuse buffer
-            // Ensure first byte is null terminated just in case
+            buf.len = 0;
             if(buf.data) buf.data[0] = 0;
 
             if (fetch_url(matchUrl.c_str(), &buf) == 0) {
@@ -299,8 +298,7 @@ void tba_api_task(void *pvParameters) {
                 if (buf.data) parse_team_status(buf.data);
             }
 
-            // Sleep for 2 minutes (API rules say be nice)
-            vTaskDelay(pdMS_TO_TICKS(120000));
+            vTaskDelay(pdMS_TO_TICKS(120000)); // 2 mins
 
         } else {
             printf("TBA: Waiting for WiFi...\n");
