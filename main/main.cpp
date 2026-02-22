@@ -37,7 +37,11 @@
 
 // --- Global Variable Definitions ---
 std::vector<std::string> tickerQueue;
-std::vector<MatchData> allMatches;
+
+// Static Array Implementation
+MatchData allMatches[MAX_MATCHES];
+int matchCount = 0;
+
 SemaphoreHandle_t matchDataMutex = NULL;
 MatchPhase currentPhase = PHASE_QUALS;
 

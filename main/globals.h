@@ -23,27 +23,22 @@ enum MatchPhase {
 };
 
 struct MatchData {
-    char key[16];        // e.g. "2026marea_qm42"
-    char comp_level[4];  // e.g. "qm", "sf", "f"
+    char key[16];
+    char comp_level[4];
     int match_number;
     int set_number;
     time_t actual_time;
-
-    // Alliance Info (Fixed size for efficiency)
-    // Teams are usually "frcXXXX", so 8 chars is safe
     char red_teams[3][8];
     char blue_teams[3][8];
     int red_score;
     int blue_score;
-
-    // For Playoffs: Which alliance are WE in? (0=None/Spec, 1=Red, 2=Blue)
     int our_alliance;
 };
 
 struct SimState {
     bool active;
-    time_t time_offset; // Added to real time
-    int match_index_override; // For manual stepping if needed
+    time_t time_offset;
+    int match_index_override;
 };
 
 struct GameScore {
@@ -66,7 +61,12 @@ extern GFXcanvas16 *canvas_dev;
 
 // Data Queues/History
 extern std::vector<std::string> tickerQueue;
-extern std::vector<MatchData> allMatches; // Replaces old matchHistory/schedule arrays
+
+// Static Array for Matches (No Heap OOM)
+#define MAX_MATCHES 200
+extern MatchData allMatches[MAX_MATCHES];
+extern int matchCount;
+
 extern SemaphoreHandle_t matchDataMutex;
 extern MatchPhase currentPhase;
 extern SimState simState;
@@ -94,7 +94,7 @@ extern time_t nextEventDate;
 extern std::string teamKey;
 extern std::string eventKey;
 extern int currentRank;
-extern std::string allianceName; // e.g., "Alliance 1"
+extern std::string allianceName;
 
 // Helper Function for Time
 time_t get_current_time();

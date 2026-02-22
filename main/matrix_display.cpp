@@ -35,7 +35,7 @@ enum SponsorState {
 
 // Simulation Helper
 void step_simulation(bool forward) {
-    if (allMatches.empty()) return;
+    if (matchCount == 0) return;
 
     time_t vNow = get_current_time();
     time_t targetTime = 0;
@@ -44,9 +44,9 @@ void step_simulation(bool forward) {
     if (matchDataMutex != NULL && xSemaphoreTake(matchDataMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
         if (forward) {
             // Find first match > vNow
-            for (const auto& m : allMatches) {
-                if (m.actual_time > vNow + 60) { // Buffer 1 min
-                    targetTime = m.actual_time;
+            for (int i = 0; i < matchCount; i++) {
+                if (allMatches[i].actual_time > vNow + 60) { // Buffer 1 min
+                    targetTime = allMatches[i].actual_time;
                     found = true;
                     break;
                 }
@@ -54,7 +54,7 @@ void step_simulation(bool forward) {
         } else {
             // Find match just before vNow
             // Iterate backwards
-            for (int i = allMatches.size() - 1; i >= 0; i--) {
+            for (int i = matchCount - 1; i >= 0; i--) {
                 if (allMatches[i].actual_time < vNow - 60) {
                     targetTime = allMatches[i].actual_time;
                     found = true;
@@ -79,9 +79,9 @@ bool isSafeForSponsors() {
 
     // Check against schedule
     if (matchDataMutex != NULL && xSemaphoreTake(matchDataMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
-        for (const auto& m : allMatches) {
-             if (m.our_alliance != 0) { // It's our match
-                 double diff = difftime(m.actual_time, now);
+        for (int i = 0; i < matchCount; i++) {
+             if (allMatches[i].our_alliance != 0) { // It's our match
+                 double diff = difftime(allMatches[i].actual_time, now);
                  if (fabs(diff) < 30 * 60) {
                      xSemaphoreGive(matchDataMutex);
                      return false;
@@ -146,20 +146,20 @@ void draw_quals_view(time_t now) {
     // List next 3 matches
     int count = 0;
     if (matchDataMutex != NULL && xSemaphoreTake(matchDataMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
-        for (const auto& m : allMatches) {
-            if (m.our_alliance != 0 && m.actual_time > now) {
+        for (int i = 0; i < matchCount; i++) {
+            if (allMatches[i].our_alliance != 0 && allMatches[i].actual_time > now) {
                 int yOff = 25 + (count * 12);
 
                 // Color based on alliance
-                uint16_t color = (m.our_alliance == 1) ? 0xF800 : 0x001F; // Red : Blue
+                uint16_t color = (allMatches[i].our_alliance == 1) ? 0xF800 : 0x001F; // Red : Blue
                 canvas_dev->setTextColor(color);
                 canvas_dev->setCursor(138, yOff);
 
                 // "Q42"
-                canvas_dev->print("Q"); canvas_dev->print(m.match_number);
+                canvas_dev->print("Q"); canvas_dev->print(allMatches[i].match_number);
 
                 // Time Delta
-                double diff = difftime(m.actual_time, now);
+                double diff = difftime(allMatches[i].actual_time, now);
                 int mins = (int)(diff / 60);
 
                 canvas_dev->setTextColor(0xFFFF);
@@ -223,7 +223,7 @@ void draw_playoffs_view(time_t now) {
 
     if (matchDataMutex != NULL && xSemaphoreTake(matchDataMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
         // Find Last Played
-        for (int i = allMatches.size() - 1; i >= 0; i--) {
+        for (int i = matchCount - 1; i >= 0; i--) {
             if (allMatches[i].our_alliance != 0 && allMatches[i].actual_time < now) {
                 lastMatch = allMatches[i];
                 hasLast = true;
@@ -232,10 +232,10 @@ void draw_playoffs_view(time_t now) {
         }
 
         // Find Next Scheduled
-        for (const auto& m : allMatches) {
-            if (m.actual_time > now) {
-                if (m.our_alliance != 0) {
-                    nextMatch = m;
+        for (int i = 0; i < matchCount; i++) {
+            if (allMatches[i].actual_time > now) {
+                if (allMatches[i].our_alliance != 0) {
+                    nextMatch = allMatches[i];
                     hasNext = true;
                     break;
                 }
@@ -248,7 +248,7 @@ void draw_playoffs_view(time_t now) {
             // Determine Opponent Teams
             char (*oppTeams)[8] = (nextMatch.our_alliance == 1) ? nextMatch.blue_teams : nextMatch.red_teams;
             // Find most recent match for these teams
-            for (int i = allMatches.size() - 1; i >= 0; i--) {
+            for (int i = matchCount - 1; i >= 0; i--) {
                 if (allMatches[i].match_number == nextMatch.match_number && strcmp(allMatches[i].comp_level, nextMatch.comp_level) == 0) continue; // Skip same match
 
                 bool oppPlayed = false;
@@ -591,8 +591,8 @@ void matrix_task(void *pvParameters) {
                     // Override Phase for Simulation based on Virtual Time
                     bool playoffStarted = false;
                     if (matchDataMutex != NULL && xSemaphoreTake(matchDataMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
-                        for (const auto& m : allMatches) {
-                    if (strcmp(m.comp_level, "qm") != 0 && m.actual_time <= virtualNow) {
+                        for (int i = 0; i < matchCount; i++) {
+                            if (strcmp(allMatches[i].comp_level, "qm") != 0 && allMatches[i].actual_time <= virtualNow) {
                                 playoffStarted = true;
                                 break;
                             }

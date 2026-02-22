@@ -24,7 +24,6 @@
 #endif
 
 // --- Fixed Buffer Strategy ---
-// Reduced to 16KB to save heap for cJSON overhead and vector resizing
 #define JSON_BUF_SIZE (16 * 1024)
 
 struct ResponseData {
@@ -98,46 +97,45 @@ static void parse_all_matches(const char* json) {
     int count = cJSON_GetArraySize(root);
     printf("TBA: Found %d matches\n", count);
 
-    // Direct Global Update to save memory
+    // Direct Static Array Update
     if (matchDataMutex != NULL) {
         if (xSemaphoreTake(matchDataMutex, pdMS_TO_TICKS(2000)) == pdTRUE) {
-            allMatches.clear();
-            allMatches.reserve(count);
+            matchCount = 0; // Reset counter
 
-            for (int i = 0; i < count; i++) {
+            for (int i = 0; i < count && i < MAX_MATCHES; i++) {
                 cJSON *m = cJSON_GetArrayItem(root, i);
-                MatchData md;
-                memset(&md, 0, sizeof(MatchData));
+                MatchData* md = &allMatches[matchCount]; // Point to static slot
+                memset(md, 0, sizeof(MatchData));
 
                 cJSON *key = cJSON_GetObjectItem(m, "key");
-                if (key && key->valuestring) strncpy(md.key, key->valuestring, sizeof(md.key)-1);
+                if (key && key->valuestring) strncpy(md->key, key->valuestring, sizeof(md->key)-1);
 
                 cJSON *comp_level = cJSON_GetObjectItem(m, "comp_level");
-                if (comp_level && comp_level->valuestring) strncpy(md.comp_level, comp_level->valuestring, sizeof(md.comp_level)-1);
+                if (comp_level && comp_level->valuestring) strncpy(md->comp_level, comp_level->valuestring, sizeof(md->comp_level)-1);
 
                 cJSON *match_number = cJSON_GetObjectItem(m, "match_number");
-                md.match_number = match_number ? match_number->valueint : 0;
+                md->match_number = match_number ? match_number->valueint : 0;
 
                 cJSON *set_number = cJSON_GetObjectItem(m, "set_number");
-                md.set_number = set_number ? set_number->valueint : 0;
+                md->set_number = set_number ? set_number->valueint : 0;
 
                 cJSON *actual_time = cJSON_GetObjectItem(m, "actual_time");
                 cJSON *predicted_time = cJSON_GetObjectItem(m, "predicted_time");
                 cJSON *time_item = cJSON_GetObjectItem(m, "time");
 
-                if (actual_time && actual_time->valueint > 0) md.actual_time = actual_time->valueint;
-                else if (predicted_time && predicted_time->valueint > 0) md.actual_time = predicted_time->valueint;
-                else if (time_item && time_item->valueint > 0) md.actual_time = time_item->valueint;
-                else md.actual_time = 0;
+                if (actual_time && actual_time->valueint > 0) md->actual_time = actual_time->valueint;
+                else if (predicted_time && predicted_time->valueint > 0) md->actual_time = predicted_time->valueint;
+                else if (time_item && time_item->valueint > 0) md->actual_time = time_item->valueint;
+                else md->actual_time = 0;
 
-                md.our_alliance = 0;
+                md->our_alliance = 0;
                 cJSON *alliances = cJSON_GetObjectItem(m, "alliances");
                 if (alliances) {
                     // RED
                     cJSON *red = cJSON_GetObjectItem(alliances, "red");
                     if (red) {
                         cJSON *score = cJSON_GetObjectItem(red, "score");
-                        md.red_score = (score && score->valueint >= 0) ? score->valueint : -1;
+                        md->red_score = (score && score->valueint >= 0) ? score->valueint : -1;
 
                         cJSON *teams = cJSON_GetObjectItem(red, "team_keys");
                         if (teams && cJSON_IsArray(teams)) {
@@ -145,8 +143,8 @@ static void parse_all_matches(const char* json) {
                             for(int t=0; t<tCount && t<3; t++) {
                                 cJSON* tItem = cJSON_GetArrayItem(teams, t);
                                 if (tItem && tItem->valuestring) {
-                                    strncpy(md.red_teams[t], tItem->valuestring, 7);
-                                    if (strcmp(tItem->valuestring, teamKey.c_str()) == 0) md.our_alliance = 1;
+                                    strncpy(md->red_teams[t], tItem->valuestring, 7);
+                                    if (strcmp(tItem->valuestring, teamKey.c_str()) == 0) md->our_alliance = 1;
                                 }
                             }
                         }
@@ -155,7 +153,7 @@ static void parse_all_matches(const char* json) {
                     cJSON *blue = cJSON_GetObjectItem(alliances, "blue");
                     if (blue) {
                         cJSON *score = cJSON_GetObjectItem(blue, "score");
-                        md.blue_score = (score && score->valueint >= 0) ? score->valueint : -1;
+                        md->blue_score = (score && score->valueint >= 0) ? score->valueint : -1;
 
                         cJSON *teams = cJSON_GetObjectItem(blue, "team_keys");
                         if (teams && cJSON_IsArray(teams)) {
@@ -163,23 +161,24 @@ static void parse_all_matches(const char* json) {
                             for(int t=0; t<tCount && t<3; t++) {
                                 cJSON* tItem = cJSON_GetArrayItem(teams, t);
                                 if (tItem && tItem->valuestring) {
-                                     strncpy(md.blue_teams[t], tItem->valuestring, 7);
-                                     if (strcmp(tItem->valuestring, teamKey.c_str()) == 0) md.our_alliance = 2;
+                                     strncpy(md->blue_teams[t], tItem->valuestring, 7);
+                                     if (strcmp(tItem->valuestring, teamKey.c_str()) == 0) md->our_alliance = 2;
                                 }
                             }
                         }
                     }
                 }
-                allMatches.push_back(md);
+                matchCount++; // Commit match
             }
 
             // Sort in place
-            std::sort(allMatches.begin(), allMatches.end(), [](const MatchData& a, const MatchData& b) {
+            // std::sort with raw pointers works for C-arrays
+            std::sort(allMatches, allMatches + matchCount, [](const MatchData& a, const MatchData& b) {
                 return a.actual_time < b.actual_time;
             });
 
             // SIMULATION INIT
-            if (simState.active && simState.time_offset == 0 && !allMatches.empty()) {
+            if (simState.active && simState.time_offset == 0 && matchCount > 0) {
                 time_t firstMatch = allMatches[0].actual_time;
                 time_t now;
                 time(&now);
@@ -187,7 +186,7 @@ static void parse_all_matches(const char* json) {
                 printf("SIMULATION: Auto-jump to start. Offset: %ld\n", (long)simState.time_offset);
             }
 
-            printf("TBA: Stored %d matches.\n", allMatches.size());
+            printf("TBA: Stored %d matches.\n", matchCount);
             xSemaphoreGive(matchDataMutex);
         } else {
             printf("TBA: Could not take mutex to update matches.\n");
