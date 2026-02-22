@@ -5,9 +5,10 @@
 #include <string>
 #include <stdint.h>
 #include <time.h>
+#include "freertos/FreeRTOS.h" // Must be before semphr.h
+#include "freertos/semphr.h"
 #include "ESP32-HUB75-MatrixPanel-I2S-DMA.h"
 #include "Adafruit_GFX.h"
-#include "freertos/semphr.h"
 
 // --- Constants & Colors ---
 #define GHOST_BLINKY 0xF800 // Red

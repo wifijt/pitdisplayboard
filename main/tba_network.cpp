@@ -14,6 +14,17 @@
 #include <algorithm>
 #include <string>
 
+// --- Fallback Configuration Check ---
+#ifndef TBA_URL_BASE
+#define TBA_URL_BASE "https://www.thebluealliance.com/api/v3"
+#endif
+
+// --- Fallback for old TBA_KEY ---
+// The original code had TBA_KEY but user might have a local config that doesn't define it if they were using example
+#ifndef TBA_KEY
+#define TBA_KEY "YOUR_TBA_API_KEY_HERE"
+#endif
+
 struct ResponseData {
     char* data;
     int len;
@@ -210,19 +221,12 @@ static void parse_team_status(const char* json) {
             // If we have an alliance name, we are definitely in playoffs or about to be
             inPlayoffs = true;
         }
-
-        cJSON *number = cJSON_GetObjectItem(alliance, "number");
-        // Could store alliance number if needed
+        // Removed 'cJSON *number' line to fix warning
     } else {
         allianceName = "";
     }
 
     // Update Phase
-    // Note: If we are not in playoffs, but the event has playoff matches, what then?
-    // The requirement says: "display the correct phase... ranking is only useful during qualifications"
-    // So if we are IN an alliance, show Playoff mode.
-    // If not, show Rank/Quals.
-
     if (matchDataMutex != NULL) {
         if (xSemaphoreTake(matchDataMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
             currentPhase = inPlayoffs ? PHASE_PLAYOFFS : PHASE_QUALS;
