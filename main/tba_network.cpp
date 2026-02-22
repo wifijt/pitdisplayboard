@@ -24,9 +24,8 @@
 #endif
 
 // --- Fixed Buffer Strategy ---
-// 48KB should be sufficient for "matches/simple" even for large events.
-// Allocating this ONCE avoids heap fragmentation/OOM during realloc.
-#define JSON_BUF_SIZE (48 * 1024)
+// Reduced to 16KB to save heap for cJSON overhead and vector resizing
+#define JSON_BUF_SIZE (16 * 1024)
 
 struct ResponseData {
     char* data;
@@ -96,92 +95,90 @@ static void parse_all_matches(const char* json) {
         return;
     }
 
-    std::vector<MatchData> newMatches;
     int count = cJSON_GetArraySize(root);
     printf("TBA: Found %d matches\n", count);
 
-    newMatches.reserve(count);
-
-    for (int i = 0; i < count; i++) {
-        cJSON *m = cJSON_GetArrayItem(root, i);
-        MatchData md;
-        memset(&md, 0, sizeof(MatchData));
-
-        cJSON *key = cJSON_GetObjectItem(m, "key");
-        if (key && key->valuestring) strncpy(md.key, key->valuestring, sizeof(md.key)-1);
-
-        cJSON *comp_level = cJSON_GetObjectItem(m, "comp_level");
-        if (comp_level && comp_level->valuestring) strncpy(md.comp_level, comp_level->valuestring, sizeof(md.comp_level)-1);
-
-        cJSON *match_number = cJSON_GetObjectItem(m, "match_number");
-        md.match_number = match_number ? match_number->valueint : 0;
-
-        cJSON *set_number = cJSON_GetObjectItem(m, "set_number");
-        md.set_number = set_number ? set_number->valueint : 0;
-
-        cJSON *actual_time = cJSON_GetObjectItem(m, "actual_time");
-        cJSON *predicted_time = cJSON_GetObjectItem(m, "predicted_time");
-        cJSON *time_item = cJSON_GetObjectItem(m, "time");
-
-        if (actual_time && actual_time->valueint > 0) md.actual_time = actual_time->valueint;
-        else if (predicted_time && predicted_time->valueint > 0) md.actual_time = predicted_time->valueint;
-        else if (time_item && time_item->valueint > 0) md.actual_time = time_item->valueint;
-        else md.actual_time = 0;
-
-        md.our_alliance = 0;
-        cJSON *alliances = cJSON_GetObjectItem(m, "alliances");
-        if (alliances) {
-            // RED
-            cJSON *red = cJSON_GetObjectItem(alliances, "red");
-            if (red) {
-                cJSON *score = cJSON_GetObjectItem(red, "score");
-                md.red_score = (score && score->valueint >= 0) ? score->valueint : -1;
-
-                cJSON *teams = cJSON_GetObjectItem(red, "team_keys");
-                if (teams && cJSON_IsArray(teams)) {
-                    int tCount = cJSON_GetArraySize(teams);
-                    for(int t=0; t<tCount && t<3; t++) {
-                        cJSON* tItem = cJSON_GetArrayItem(teams, t);
-                        if (tItem && tItem->valuestring) {
-                            strncpy(md.red_teams[t], tItem->valuestring, 7);
-                            if (strcmp(tItem->valuestring, teamKey.c_str()) == 0) md.our_alliance = 1;
-                        }
-                    }
-                }
-            }
-            // BLUE
-            cJSON *blue = cJSON_GetObjectItem(alliances, "blue");
-            if (blue) {
-                cJSON *score = cJSON_GetObjectItem(blue, "score");
-                md.blue_score = (score && score->valueint >= 0) ? score->valueint : -1;
-
-                cJSON *teams = cJSON_GetObjectItem(blue, "team_keys");
-                if (teams && cJSON_IsArray(teams)) {
-                    int tCount = cJSON_GetArraySize(teams);
-                    for(int t=0; t<tCount && t<3; t++) {
-                        cJSON* tItem = cJSON_GetArrayItem(teams, t);
-                        if (tItem && tItem->valuestring) {
-                             strncpy(md.blue_teams[t], tItem->valuestring, 7);
-                             if (strcmp(tItem->valuestring, teamKey.c_str()) == 0) md.our_alliance = 2;
-                        }
-                    }
-                }
-            }
-        }
-        newMatches.push_back(md);
-    }
-
-    cJSON_Delete(root);
-
-    std::sort(newMatches.begin(), newMatches.end(), [](const MatchData& a, const MatchData& b) {
-        return a.actual_time < b.actual_time;
-    });
-
+    // Direct Global Update to save memory
     if (matchDataMutex != NULL) {
-        if (xSemaphoreTake(matchDataMutex, pdMS_TO_TICKS(1000)) == pdTRUE) {
-            allMatches = newMatches;
+        if (xSemaphoreTake(matchDataMutex, pdMS_TO_TICKS(2000)) == pdTRUE) {
+            allMatches.clear();
+            allMatches.reserve(count);
 
-            // SIMULATION INIT: If sim is active and time offset is 0, jump to start
+            for (int i = 0; i < count; i++) {
+                cJSON *m = cJSON_GetArrayItem(root, i);
+                MatchData md;
+                memset(&md, 0, sizeof(MatchData));
+
+                cJSON *key = cJSON_GetObjectItem(m, "key");
+                if (key && key->valuestring) strncpy(md.key, key->valuestring, sizeof(md.key)-1);
+
+                cJSON *comp_level = cJSON_GetObjectItem(m, "comp_level");
+                if (comp_level && comp_level->valuestring) strncpy(md.comp_level, comp_level->valuestring, sizeof(md.comp_level)-1);
+
+                cJSON *match_number = cJSON_GetObjectItem(m, "match_number");
+                md.match_number = match_number ? match_number->valueint : 0;
+
+                cJSON *set_number = cJSON_GetObjectItem(m, "set_number");
+                md.set_number = set_number ? set_number->valueint : 0;
+
+                cJSON *actual_time = cJSON_GetObjectItem(m, "actual_time");
+                cJSON *predicted_time = cJSON_GetObjectItem(m, "predicted_time");
+                cJSON *time_item = cJSON_GetObjectItem(m, "time");
+
+                if (actual_time && actual_time->valueint > 0) md.actual_time = actual_time->valueint;
+                else if (predicted_time && predicted_time->valueint > 0) md.actual_time = predicted_time->valueint;
+                else if (time_item && time_item->valueint > 0) md.actual_time = time_item->valueint;
+                else md.actual_time = 0;
+
+                md.our_alliance = 0;
+                cJSON *alliances = cJSON_GetObjectItem(m, "alliances");
+                if (alliances) {
+                    // RED
+                    cJSON *red = cJSON_GetObjectItem(alliances, "red");
+                    if (red) {
+                        cJSON *score = cJSON_GetObjectItem(red, "score");
+                        md.red_score = (score && score->valueint >= 0) ? score->valueint : -1;
+
+                        cJSON *teams = cJSON_GetObjectItem(red, "team_keys");
+                        if (teams && cJSON_IsArray(teams)) {
+                            int tCount = cJSON_GetArraySize(teams);
+                            for(int t=0; t<tCount && t<3; t++) {
+                                cJSON* tItem = cJSON_GetArrayItem(teams, t);
+                                if (tItem && tItem->valuestring) {
+                                    strncpy(md.red_teams[t], tItem->valuestring, 7);
+                                    if (strcmp(tItem->valuestring, teamKey.c_str()) == 0) md.our_alliance = 1;
+                                }
+                            }
+                        }
+                    }
+                    // BLUE
+                    cJSON *blue = cJSON_GetObjectItem(alliances, "blue");
+                    if (blue) {
+                        cJSON *score = cJSON_GetObjectItem(blue, "score");
+                        md.blue_score = (score && score->valueint >= 0) ? score->valueint : -1;
+
+                        cJSON *teams = cJSON_GetObjectItem(blue, "team_keys");
+                        if (teams && cJSON_IsArray(teams)) {
+                            int tCount = cJSON_GetArraySize(teams);
+                            for(int t=0; t<tCount && t<3; t++) {
+                                cJSON* tItem = cJSON_GetArrayItem(teams, t);
+                                if (tItem && tItem->valuestring) {
+                                     strncpy(md.blue_teams[t], tItem->valuestring, 7);
+                                     if (strcmp(tItem->valuestring, teamKey.c_str()) == 0) md.our_alliance = 2;
+                                }
+                            }
+                        }
+                    }
+                }
+                allMatches.push_back(md);
+            }
+
+            // Sort in place
+            std::sort(allMatches.begin(), allMatches.end(), [](const MatchData& a, const MatchData& b) {
+                return a.actual_time < b.actual_time;
+            });
+
+            // SIMULATION INIT
             if (simState.active && simState.time_offset == 0 && !allMatches.empty()) {
                 time_t firstMatch = allMatches[0].actual_time;
                 time_t now;
@@ -190,10 +187,14 @@ static void parse_all_matches(const char* json) {
                 printf("SIMULATION: Auto-jump to start. Offset: %ld\n", (long)simState.time_offset);
             }
 
+            printf("TBA: Stored %d matches.\n", allMatches.size());
             xSemaphoreGive(matchDataMutex);
-            printf("TBA: Updated allMatches with %d entries\n", allMatches.size());
+        } else {
+            printf("TBA: Could not take mutex to update matches.\n");
         }
     }
+
+    cJSON_Delete(root);
 }
 
 // --- Parse Team Status ---
@@ -251,9 +252,8 @@ static void parse_team_status(const char* json) {
 void tba_api_task(void *pvParameters) {
     printf("TBA TASK: Started on Core %d\n", xPortGetCoreID());
 
-    // FIXED BUFFER STRATEGY
-    // Allocate once, fail hard if we can't get it at startup.
-    // This prevents fragmentation loops.
+    // FIXED BUFFER STRATEGY: 16KB
+    // Reduced from 48KB to save heap for cJSON/Vector
     ResponseData buf;
     buf.data = (char*)malloc(JSON_BUF_SIZE);
     buf.capacity = JSON_BUF_SIZE;
@@ -261,13 +261,7 @@ void tba_api_task(void *pvParameters) {
 
     if (!buf.data) {
         printf("TBA TASK: CRITICAL - Failed to allocate %d bytes!\n", JSON_BUF_SIZE);
-        // Try smaller? 24KB?
-        buf.capacity = 24 * 1024;
-        buf.data = (char*)malloc(buf.capacity);
-        if (!buf.data) {
-             printf("TBA TASK: Fatal Memory Failure.\n");
-             vTaskDelete(NULL); // Die
-        }
+        vTaskDelete(NULL);
     }
     printf("TBA TASK: Allocated %d bytes buffer.\n", buf.capacity);
 
