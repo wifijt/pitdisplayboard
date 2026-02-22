@@ -27,6 +27,14 @@
 #include "tba_network.h"
 #include "matrix_display.h"
 
+// --- Fallback Configuration ---
+#ifndef REAL_TEAM
+#define REAL_TEAM "frc5459"
+#endif
+#ifndef REAL_EVENT
+#define REAL_EVENT "2026marea"
+#endif
+
 // --- Global Variable Definitions ---
 std::vector<std::string> tickerQueue;
 std::vector<MatchData> allMatches;
@@ -83,7 +91,8 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
         printf("WiFi Disconnected. Reconnecting...\n");
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
-        printf("Got IP: " IPSTR "\n", IP2CO2IP(&event->ip_info.ip));
+        // Fix for undefined IP2CO2IP macro, using correct IP2STR
+        printf("Got IP: " IPSTR "\n", IP2STR(&event->ip_info.ip));
     }
 }
 
@@ -192,6 +201,14 @@ extern "C" void app_main(void) {
     #ifdef SIMULATION_MODE
         if (SIMULATION_MODE) {
             simState.active = true;
+            // Fallback for SIM constants if not defined
+            #ifndef SIM_TEAM
+            #define SIM_TEAM "frc88"
+            #endif
+            #ifndef SIM_EVENT
+            #define SIM_EVENT "2026week0"
+            #endif
+
             teamKey = SIM_TEAM;
             eventKey = SIM_EVENT;
             printf("Running in SIMULATION MODE: %s @ %s\n", teamKey.c_str(), eventKey.c_str());
