@@ -15,6 +15,31 @@
 #include "esp_system.h"
 #include <time.h>
 #include <math.h>
+#include "sponsors.h"
+
+enum SponsorState {
+    SPONSOR_IDLE,
+    SPONSOR_INTRO,
+    SPONSOR_SHOW_LIST,
+    SPONSOR_OUTRO
+};
+
+bool isSafeForSponsors() {
+    time_t now;
+    time(&now);
+
+    // Check against schedule
+    for (int i = 0; i < 3; i++) {
+        if (schedule[i].estTime != 0) {
+            double diff = difftime(schedule[i].estTime, now);
+            // "within 30 min of a match" -> -30min to +30min (approx)
+            // If match is 10 mins ago, diff is -600.
+            // If match is 10 mins in future, diff is 600.
+            if (fabs(diff) < 30 * 60) return false;
+        }
+    }
+    return true;
+}
 
 void drawTiger(GFXcanvas16 *canvas, int x, int y) {
     for (int row = 0; row < 64; row++) {
@@ -39,21 +64,20 @@ void refreshTickerQueue() {
 
     // If year > 2020, we know NTP has synced
     if (timeinfo.tm_year > 120) {
-        struct tm target;
-        memset(&target, 0, sizeof(struct tm));
-        target.tm_year = 2026 - 1900;
-        target.tm_mon = 1;  // February (0-indexed is Jan, so 1 is Feb)
-        target.tm_mday = 21; // Week 0 Date
+        if (nextEventDate > 0) {
+            double diff = difftime(nextEventDate, now);
+            int days = (int)(diff / 86400);
 
-        double diff = difftime(mktime(&target), now);
-        int days = (int)(diff / 86400);
-
-        if (days > 0) {
-            tickerQueue.push_back(std::string(MSG_WEEK0_PREFIX) + std::to_string(days) + MSG_WEEK0_SUFFIX);
-        } else if (days == 0) {
-            tickerQueue.push_back(MSG_WEEK0_NOW);
+            if (days > 0) {
+                tickerQueue.push_back("T-" + std::to_string(days) + " DAYS UNTIL " + nextEventName + " COMP");
+            } else if (days == 0) {
+                tickerQueue.push_back("IT IS TIME FOR " + nextEventName + " COMP!");
+            } else {
+                tickerQueue.push_back(MSG_SEASON_START);
+            }
         } else {
-            tickerQueue.push_back(MSG_SEASON_START);
+            // Fallback if no event found yet
+            tickerQueue.push_back("CHECKING SCHEDULE...");
         }
     } else {
         tickerQueue.push_back(MSG_WAIT_SYNC);
@@ -93,9 +117,181 @@ void matrix_task(void *pvParameters) {
     uint32_t lastRotationTime = 0;
     bool showUpcoming = true; // Toggle between Schedule and Stats
 
+    // Sponsor Logic Variables
+    SponsorState sponsorState = SPONSOR_IDLE;
+    time_t lastSponsorRunTime = 0;
+    float sponsorScrollX = 256;
+    unsigned int sponsorListIdx = 0;
+    uint32_t sponsorWaitStart = 0; // ms
+    float sponsorListY = 64;
+    uint32_t outroStartTime = 0;
+
+    // Initialize last run time to (now - 14.5 mins) so it runs 30 seconds after boot for testing
+    time(&lastSponsorRunTime);
+    lastSponsorRunTime -= (15 * 60) - 30;
+
     while(1) {
         canvas_dev->fillScreen(0);
         uint32_t nowMs = esp_timer_get_time() / 1000;
+
+        // --- SPONSOR CHECK ---
+        if (sponsorState == SPONSOR_IDLE) {
+            time_t nowSec;
+            time(&nowSec);
+            if (difftime(nowSec, lastSponsorRunTime) >= 15 * 60) {
+                if (isSafeForSponsors()) {
+                    sponsorState = SPONSOR_INTRO;
+                    sponsorScrollX = 256;
+                    lastSponsorRunTime = nowSec;
+                }
+            }
+        }
+
+        if (sponsorState != SPONSOR_IDLE) {
+            // --- SPONSOR DISPLAY LOGIC ---
+
+            if (sponsorState == SPONSOR_INTRO) {
+                // Static Header
+                canvas_dev->setFont(NULL);
+                canvas_dev->setTextColor(0xFFFF);
+
+                const char* header = SPONSOR_HEADER_TEXT;
+                int16_t x1, y1; uint16_t w, h;
+                // getTextBounds with NULL font works differently or not at all in some GFX versions,
+                // but default font is 6x8 pixels.
+                // Centering manually assuming 6px width per char
+                int len = strlen(header);
+                int w_guess = len * 6;
+                int startX = (256 - w_guess) / 2;
+                if (startX < 0) startX = 0;
+
+                canvas_dev->setCursor(startX, 5);
+                canvas_dev->print(header);
+
+                // Wait briefly then move to list
+                if (sponsorWaitStart == 0) sponsorWaitStart = nowMs;
+                if (nowMs - sponsorWaitStart > 2000) {
+                     sponsorState = SPONSOR_SHOW_LIST;
+                     sponsorListIdx = 0;
+                     sponsorListY = 90; // Start completely off screen
+                     sponsorWaitStart = 0;
+                }
+            }
+            else if (sponsorState == SPONSOR_SHOW_LIST) {
+                if (sponsorListIdx < SPONSOR_LIST.size()) {
+                    std::string name = SPONSOR_LIST[sponsorListIdx];
+                    canvas_dev->setFont(&FreeSansBold12pt7b);
+                    canvas_dev->setTextColor(0xFC00); // Orange-ish
+
+                    // Basic Word Wrap Logic
+                    // 1. Check width
+                    int16_t x1, y1; uint16_t w, h;
+                    canvas_dev->getTextBounds(name.c_str(), 0, 0, &x1, &y1, &w, &h);
+
+                    std::vector<std::string> lines;
+                    if (w > 250) {
+                        // Needs wrap. Simple split by finding middle space?
+                        // For simplicity, just split if too long.
+                        // Real wrapping requires parsing spaces.
+                        size_t splitPos = name.length() / 2;
+                        size_t spacePos = name.find(' ', splitPos);
+                         if (spacePos == std::string::npos) spacePos = name.find_last_of(' ', splitPos);
+
+                         if (spacePos != std::string::npos) {
+                             lines.push_back(name.substr(0, spacePos));
+                             lines.push_back(name.substr(spacePos + 1));
+                         } else {
+                             lines.push_back(name); // Can't split
+                         }
+                    } else {
+                        lines.push_back(name);
+                    }
+
+                    int totalHeight = lines.size() * 25; // approx height with spacing
+                    float targetY = 40; // Fixed baseline "just under" header
+
+                    if (sponsorWaitStart == 0) {
+                        // Scrolling up
+                        if (sponsorListY > targetY) {
+                            sponsorListY -= 2.0;
+                        } else {
+                            // Arrived
+                            sponsorListY = targetY;
+                            sponsorWaitStart = nowMs;
+                        }
+                    } else {
+                        // Waiting
+                        if (nowMs - sponsorWaitStart > 1000) {
+                             // Done waiting, move next (up)
+                             sponsorListY -= 2.0;
+                             // Just scroll off top
+                             if (sponsorListY < -50) {
+                                 sponsorListIdx++;
+                                 sponsorListY = 90;
+                                 sponsorWaitStart = 0;
+                             }
+                        }
+                    }
+
+                    // Draw Lines
+                    int currentY = (int)sponsorListY;
+                    // Move up slightly if multi-line to center block
+                    if (lines.size() > 1) currentY -= (10 * (lines.size()-1));
+
+                    for (const auto& line : lines) {
+                        canvas_dev->getTextBounds(line.c_str(), 0, 0, &x1, &y1, &w, &h);
+                        int drawX = (256 - w) / 2;
+                        canvas_dev->setCursor(drawX, currentY);
+                        canvas_dev->print(line.c_str());
+                        currentY += 25; // Line height
+                    }
+
+                    // Draw Header ON TOP of scrolling text with black background
+                    canvas_dev->fillRect(0, 0, 256, 15, 0x0000); // Black box
+                    canvas_dev->setFont(NULL);
+                    canvas_dev->setTextColor(0xFFFF);
+                    const char* header = SPONSOR_HEADER_TEXT;
+                    int len = strlen(header);
+                    int w_guess = len * 6;
+                    int startX = (256 - w_guess) / 2;
+                    if (startX < 0) startX = 0;
+                    canvas_dev->setCursor(startX, 5);
+                    canvas_dev->print(header);
+
+                } else {
+                    sponsorState = SPONSOR_OUTRO;
+                    outroStartTime = nowMs;
+                }
+            }
+            else if (sponsorState == SPONSOR_OUTRO) {
+                float progress = (nowMs - outroStartTime) / 1000.0f; // seconds
+                if (progress > 4.0f) {
+                    sponsorState = SPONSOR_IDLE;
+                } else {
+                    // Static Thanks
+                    canvas_dev->setFont(&FreeSansBold18pt7b);
+                    uint16_t color = (fmod(progress, 0.5f) < 0.25f) ? 0xFFFF : 0x07E0; // White/Green flash
+                    canvas_dev->setTextColor(color);
+
+                    std::string thanks = "THANK YOU!!";
+                    int16_t x1, y1; uint16_t w, h;
+                    canvas_dev->getTextBounds(thanks.c_str(), 0, 0, &x1, &y1, &w, &h);
+
+                    canvas_dev->setCursor((256 - w)/2, 45);
+                    canvas_dev->print(thanks.c_str());
+                }
+            }
+
+            // Draw Green Pulsing Border LAST (on top of everything)
+            pulseIdx += 0.3; // Faster pulse
+            uint8_t p = 150 + (int)(100 * sin(pulseIdx));
+            uint16_t pColor = matrix->color565(0, p, 0); // Green
+            canvas_dev->drawRect(0, 0, 256, 64, pColor);
+            canvas_dev->drawRect(1, 1, 254, 62, pColor);
+        }
+
+        // Only run normal logic if IDLE
+        if (sponsorState == SPONSOR_IDLE) {
 
         // --- 1. PANEL ROTATION TIMER (10 Seconds) ---
         if (nowMs - lastRotationTime > 7000) {
@@ -329,6 +525,7 @@ void matrix_task(void *pvParameters) {
             canvas_dev->drawRect(0, 0, 256, 64, pColor);
             canvas_dev->drawRect(1, 1, 254, 62, pColor);
         }
+        } // End of sponsorState == SPONSOR_IDLE check
 
         // --- D. FINAL RENDER ---
         uint16_t *buf = canvas_dev->getBuffer();

@@ -4,6 +4,7 @@
 #include <vector>
 #include <string>
 #include <stdint.h>
+#include <time.h>
 #include "ESP32-HUB75-MatrixPanel-I2S-DMA.h"
 #include "Adafruit_GFX.h"
 
@@ -18,6 +19,7 @@ struct MatchEntry {
     char type;    // 'Q' or 'P'
     int number;
     uint16_t color; // 0xF800 (Red) or 0x001F (Blue)
+    time_t estTime; // Estimated match time (Unix timestamp)
 };
 
 struct GameScore {
@@ -55,6 +57,12 @@ extern int currentlyPlaying;
 extern LastMatchData lastMatch;
 
 // Pac-Man Game State
+enum GhostState {
+    GHOST_ALIVE,
+    GHOST_EYES,
+    GHOST_DEAD
+};
+
 extern bool borderActive;
 extern uint32_t lastBorderStartTime;
 extern float pacPos;
@@ -62,6 +70,11 @@ extern float ghostPos[4];
 extern float worldSpeed;
 extern bool powerMode;
 extern uint32_t powerStartTime;
-extern bool ghostEaten[4];
+extern GhostState ghostState[4];
+extern uint32_t winStartTime;
+
+// Event Schedule
+extern std::string nextEventName;
+extern time_t nextEventDate;
 
 #endif // GLOBALS_H
