@@ -306,9 +306,9 @@ void draw_playoffs_view(time_t now) {
         canvas_dev->setTextColor(0xFFE0); // Yellow
         canvas_dev->setCursor(138, y);
         // "SF1-1"
-        if (nextMatch.comp_level == "sf") canvas_dev->print("SF");
-        else if (nextMatch.comp_level == "f") canvas_dev->print("F");
-        else canvas_dev->print(nextMatch.comp_level.c_str());
+        if (strcmp(nextMatch.comp_level, "sf") == 0) canvas_dev->print("SF");
+        else if (strcmp(nextMatch.comp_level, "f") == 0) canvas_dev->print("F");
+        else canvas_dev->print(nextMatch.comp_level);
 
         canvas_dev->print(nextMatch.match_number);
         canvas_dev->print("-"); canvas_dev->print(nextMatch.set_number);
@@ -434,7 +434,6 @@ void matrix_task(void *pvParameters) {
                         lines.push_back(name);
                     }
 
-                    int totalHeight = lines.size() * 25;
                     float targetY = 40;
 
                     if (sponsorWaitStart == 0) {
