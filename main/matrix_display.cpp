@@ -246,31 +246,31 @@ void draw_playoffs_view(time_t now) {
         // Logic for Opponent Score if Next Match exists
         if (hasNext) {
             // Determine Opponent Teams
-            std::vector<std::string>& oppTeams = (nextMatch.our_alliance == 1) ? nextMatch.blue_teams : nextMatch.red_teams;
-            if (!oppTeams.empty()) {
-                // Find most recent match for these teams
-                for (int i = allMatches.size() - 1; i >= 0; i--) {
-                    if (allMatches[i].match_number == nextMatch.match_number && allMatches[i].comp_level == nextMatch.comp_level) continue; // Skip same match
+            char (*oppTeams)[8] = (nextMatch.our_alliance == 1) ? nextMatch.blue_teams : nextMatch.red_teams;
+            // Find most recent match for these teams
+            for (int i = allMatches.size() - 1; i >= 0; i--) {
+                if (allMatches[i].match_number == nextMatch.match_number && strcmp(allMatches[i].comp_level, nextMatch.comp_level) == 0) continue; // Skip same match
 
-                    bool oppPlayed = false;
-                    // Check if any opp team was in this match
-                    // Ideally we check if it was the SAME ALLIANCE configuration
-                    // But in playoffs, alliances are fixed. So if any member played, it's that alliance.
-                    for (const auto& ot : oppTeams) {
-                        for (const auto& rt : allMatches[i].red_teams) if (ot == rt) oppPlayed = true;
-                        for (const auto& bt : allMatches[i].blue_teams) if (ot == bt) oppPlayed = true;
-                    }
+                bool oppPlayed = false;
+                // Check if any opp team was in this match
+                for (int t=0; t<3; t++) {
+                    const char* ot = oppTeams[t];
+                    if (ot[0] == 0) continue;
+                    for (int rt=0; rt<3; rt++) if (strcmp(ot, allMatches[i].red_teams[rt]) == 0) oppPlayed = true;
+                    for (int bt=0; bt<3; bt++) if (strcmp(ot, allMatches[i].blue_teams[bt]) == 0) oppPlayed = true;
+                }
 
-                    if (oppPlayed && allMatches[i].red_score >= 0) {
-                        // Get their score
-                        // We need to know which side they were on in THAT match
-                        bool wasRed = false;
-                         for (const auto& ot : oppTeams) {
-                            for (const auto& rt : allMatches[i].red_teams) if (ot == rt) wasRed = true;
-                        }
-                        opponentLastScore = wasRed ? allMatches[i].red_score : allMatches[i].blue_score;
-                        break;
+                if (oppPlayed && allMatches[i].red_score >= 0) {
+                    // Get their score
+                    // We need to know which side they were on in THAT match
+                    bool wasRed = false;
+                    for (int t=0; t<3; t++) {
+                        const char* ot = oppTeams[t];
+                        if (ot[0] == 0) continue;
+                        for (int rt=0; rt<3; rt++) if (strcmp(ot, allMatches[i].red_teams[rt]) == 0) wasRed = true;
                     }
+                    opponentLastScore = wasRed ? allMatches[i].red_score : allMatches[i].blue_score;
+                    break;
                 }
             }
         }
@@ -593,7 +593,7 @@ void matrix_task(void *pvParameters) {
                     bool playoffStarted = false;
                     if (matchDataMutex != NULL && xSemaphoreTake(matchDataMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
                         for (const auto& m : allMatches) {
-                            if (m.comp_level != "qm" && m.actual_time <= virtualNow) {
+                    if (strcmp(m.comp_level, "qm") != 0 && m.actual_time <= virtualNow) {
                                 playoffStarted = true;
                                 break;
                             }

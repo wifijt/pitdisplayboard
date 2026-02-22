@@ -35,13 +35,7 @@ static esp_err_t _http_event_handler(esp_http_client_event_t *evt) {
     if (evt->event_id == HTTP_EVENT_ON_DATA) {
         ResponseData* buf = (ResponseData*)evt->user_data;
         if (buf) {
-            // Check for initial NULL data if malloc failed earlier (safety)
-            if (buf->data == NULL) {
-                // Try to allocate small chunk now? Or just fail?
-                // Let's try to alloc 1KB if it's NULL but capacity is set (weird state)
-                // Better to just fail safe.
-                return ESP_FAIL;
-            }
+            if (buf->data == NULL) return ESP_FAIL;
 
             if (buf->len + evt->data_len + 1 > buf->capacity) {
                 int new_cap = buf->capacity + evt->data_len + 1024;
@@ -105,15 +99,19 @@ static void parse_all_matches(const char* json) {
     int count = cJSON_GetArraySize(root);
     printf("TBA: Found %d matches\n", count);
 
+    // Reserve to prevent reallocations
+    newMatches.reserve(count);
+
     for (int i = 0; i < count; i++) {
         cJSON *m = cJSON_GetArrayItem(root, i);
         MatchData md;
+        memset(&md, 0, sizeof(MatchData)); // Clear struct
 
         cJSON *key = cJSON_GetObjectItem(m, "key");
-        md.key = key ? key->valuestring : "";
+        if (key && key->valuestring) strncpy(md.key, key->valuestring, sizeof(md.key)-1);
 
         cJSON *comp_level = cJSON_GetObjectItem(m, "comp_level");
-        md.comp_level = comp_level ? comp_level->valuestring : "";
+        if (comp_level && comp_level->valuestring) strncpy(md.comp_level, comp_level->valuestring, sizeof(md.comp_level)-1);
 
         cJSON *match_number = cJSON_GetObjectItem(m, "match_number");
         md.match_number = match_number ? match_number->valueint : 0;
@@ -144,10 +142,12 @@ static void parse_all_matches(const char* json) {
                 cJSON *teams = cJSON_GetObjectItem(red, "team_keys");
                 if (teams && cJSON_IsArray(teams)) {
                     int tCount = cJSON_GetArraySize(teams);
-                    for(int t=0; t<tCount; t++) {
-                        std::string tKey = cJSON_GetArrayItem(teams, t)->valuestring;
-                        md.red_teams.push_back(tKey);
-                        if (tKey == teamKey) md.our_alliance = 1; // Red
+                    for(int t=0; t<tCount && t<3; t++) {
+                        cJSON* tItem = cJSON_GetArrayItem(teams, t);
+                        if (tItem && tItem->valuestring) {
+                            strncpy(md.red_teams[t], tItem->valuestring, 7); // Safe limit
+                            if (strcmp(tItem->valuestring, teamKey.c_str()) == 0) md.our_alliance = 1; // Red
+                        }
                     }
                 }
             }
@@ -161,10 +161,12 @@ static void parse_all_matches(const char* json) {
                 cJSON *teams = cJSON_GetObjectItem(blue, "team_keys");
                 if (teams && cJSON_IsArray(teams)) {
                     int tCount = cJSON_GetArraySize(teams);
-                    for(int t=0; t<tCount; t++) {
-                        std::string tKey = cJSON_GetArrayItem(teams, t)->valuestring;
-                        md.blue_teams.push_back(tKey);
-                        if (tKey == teamKey) md.our_alliance = 2; // Blue
+                    for(int t=0; t<tCount && t<3; t++) {
+                        cJSON* tItem = cJSON_GetArrayItem(teams, t);
+                        if (tItem && tItem->valuestring) {
+                             strncpy(md.blue_teams[t], tItem->valuestring, 7); // Safe limit
+                             if (strcmp(tItem->valuestring, teamKey.c_str()) == 0) md.our_alliance = 2; // Blue
+                        }
                     }
                 }
             }
@@ -253,7 +255,6 @@ void tba_api_task(void *pvParameters) {
         printf("TBA TASK: CRITICAL - Failed to allocate initial buffer!\n");
         // We can't do much without memory. Delay and retry loop?
         // Or just let it crash safely later.
-        // For now, let's delay loop.
         while(1) { vTaskDelay(pdMS_TO_TICKS(10000)); }
     }
 

@@ -23,20 +23,21 @@ enum MatchPhase {
 };
 
 struct MatchData {
-    std::string key;
-    std::string comp_level; // "qm", "sf", "f"
+    char key[16];        // e.g. "2026marea_qm42"
+    char comp_level[4];  // e.g. "qm", "sf", "f"
     int match_number;
     int set_number;
-    time_t actual_time; // Predicted or actual time
+    time_t actual_time;
 
-    // Alliance Info
-    std::vector<std::string> red_teams;
-    std::vector<std::string> blue_teams;
+    // Alliance Info (Fixed size for efficiency)
+    // Teams are usually "frcXXXX", so 8 chars is safe
+    char red_teams[3][8];
+    char blue_teams[3][8];
     int red_score;
     int blue_score;
 
     // For Playoffs: Which alliance are WE in? (0=None/Spec, 1=Red, 2=Blue)
-    int our_alliance; // 1 or 2
+    int our_alliance;
 };
 
 struct SimState {
