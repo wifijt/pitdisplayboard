@@ -20,6 +20,7 @@
 #include "esp_heap_caps.h"
 #include "wifi_provisioning/manager.h"
 #include "wifi_provisioning/scheme_ble.h"
+#include "esp_pm.h" // For power management
 
 // --- Brownout Fix Includes ---
 #include "soc/soc.h"
@@ -212,8 +213,14 @@ extern "C" void app_main(void) {
     // --- BROWNOUT FIX ---
     WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);
 
+    // --- HARDWARE POWER FIX ---
+    // Manually force Matrix OE (GPIO 14) HIGH to disable output immediately.
+    // This prevents LEDs from turning on randomly during boot and drawing massive current.
+    gpio_reset_pin(GPIO_NUM_14);
+    gpio_set_direction(GPIO_NUM_14, GPIO_MODE_OUTPUT);
+    gpio_set_level(GPIO_NUM_14, 1);
+
     // --- STABILIZATION DELAY ---
-    // Allow power rails to stabilize before high current draw
     vTaskDelay(pdMS_TO_TICKS(2000));
 
     matchDataMutex = xSemaphoreCreateMutex();
