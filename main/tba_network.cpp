@@ -24,9 +24,9 @@
 #define TBA_KEY "YOUR_TBA_API_KEY_HERE"
 #endif
 
-// --- PSRAM Buffer Strategy ---
-// 64KB fits "matches/simple" comfortably.
-#define JSON_BUF_SIZE (64 * 1024)
+// --- Buffer Strategy ---
+#define PSRAM_BUF_SIZE (64 * 1024)
+#define INTERNAL_BUF_SIZE (12 * 1024) // Reduced to 12KB to save heap for SSL
 
 struct ResponseData {
     char* data;
@@ -36,15 +36,13 @@ struct ResponseData {
 
 // --- Custom Allocator for cJSON/Buffer ---
 static void* psram_malloc(size_t size) {
-    // Try PSRAM first
     void* ptr = heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (ptr) return ptr;
-    // Fallback to internal RAM if PSRAM unavailable/full
     return malloc(size);
 }
 
 static void psram_free(void* ptr) {
-    free(ptr); // 'free' handles both heap regions in ESP-IDF
+    free(ptr);
 }
 
 // --- HTTP Event Handler ---
@@ -69,14 +67,24 @@ static esp_err_t _http_event_handler(esp_http_client_event_t *evt) {
 
 // --- Helper: Fetch URL ---
 static int fetch_url(const char* url, ResponseData* outBuf) {
+    // Diagnostic Heap Check
+    printf("TBA: Pre-Fetch Heap: %d free, %d largest block\n",
+           (int)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+           (int)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+
     esp_http_client_config_t config = {};
     config.url = url;
     config.crt_bundle_attach = esp_crt_bundle_attach;
     config.timeout_ms = 40000;
     config.event_handler = _http_event_handler;
     config.user_data = outBuf;
+    config.keep_alive_enable = false; // Disable keep-alive to save memory?
 
     esp_http_client_handle_t client = esp_http_client_init(&config);
+    if (!client) {
+        printf("TBA: Failed to init HTTP client (OOM?)\n");
+        return -1;
+    }
     esp_http_client_set_header(client, "X-TBA-Auth-Key", TBA_KEY);
 
     printf("TBA: Fetching %s\n", url);
@@ -113,7 +121,7 @@ static void parse_all_matches(const char* json) {
 
     if (matchDataMutex != NULL) {
         if (xSemaphoreTake(matchDataMutex, pdMS_TO_TICKS(2000)) == pdTRUE) {
-            matchCount = 0; // Reset counter
+            matchCount = 0;
 
             for (int i = 0; i < count && i < MAX_MATCHES; i++) {
                 cJSON *m = cJSON_GetArrayItem(root, i);
@@ -144,12 +152,10 @@ static void parse_all_matches(const char* json) {
                 md->our_alliance = 0;
                 cJSON *alliances = cJSON_GetObjectItem(m, "alliances");
                 if (alliances) {
-                    // RED
                     cJSON *red = cJSON_GetObjectItem(alliances, "red");
                     if (red) {
                         cJSON *score = cJSON_GetObjectItem(red, "score");
                         md->red_score = (score && score->valueint >= 0) ? score->valueint : -1;
-
                         cJSON *teams = cJSON_GetObjectItem(red, "team_keys");
                         if (teams && cJSON_IsArray(teams)) {
                             int tCount = cJSON_GetArraySize(teams);
@@ -162,12 +168,10 @@ static void parse_all_matches(const char* json) {
                             }
                         }
                     }
-                    // BLUE
                     cJSON *blue = cJSON_GetObjectItem(alliances, "blue");
                     if (blue) {
                         cJSON *score = cJSON_GetObjectItem(blue, "score");
                         md->blue_score = (score && score->valueint >= 0) ? score->valueint : -1;
-
                         cJSON *teams = cJSON_GetObjectItem(blue, "team_keys");
                         if (teams && cJSON_IsArray(teams)) {
                             int tCount = cJSON_GetArraySize(teams);
@@ -188,7 +192,6 @@ static void parse_all_matches(const char* json) {
                 return a.actual_time < b.actual_time;
             });
 
-            // SIMULATION INIT
             if (simState.active && simState.time_offset == 0 && matchCount > 0) {
                 time_t firstMatch = allMatches[0].actual_time;
                 time_t now;
@@ -213,7 +216,6 @@ static void parse_team_status(const char* json) {
     cJSON *root = cJSON_Parse(json);
     if (root == NULL) return;
 
-    // Rank
     cJSON *qual = cJSON_GetObjectItem(root, "qual");
     if (qual) {
         cJSON *ranking = cJSON_GetObjectItem(qual, "ranking");
@@ -225,7 +227,6 @@ static void parse_team_status(const char* json) {
         }
     }
 
-    // Playoff Status / Alliance
     bool inPlayoffs = false;
     cJSON *playoff = cJSON_GetObjectItem(root, "playoff");
     if (playoff && !cJSON_IsNull(playoff)) {
@@ -235,7 +236,6 @@ static void parse_team_status(const char* json) {
         }
     }
 
-    // Alliance Name
     cJSON *alliance = cJSON_GetObjectItem(root, "alliance");
     if (alliance && !cJSON_IsNull(alliance)) {
         cJSON *name = cJSON_GetObjectItem(alliance, "name");
@@ -247,7 +247,6 @@ static void parse_team_status(const char* json) {
         allianceName = "";
     }
 
-    // Update Phase
     if (matchDataMutex != NULL) {
         if (xSemaphoreTake(matchDataMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
             currentPhase = inPlayoffs ? PHASE_PLAYOFFS : PHASE_QUALS;
@@ -262,30 +261,33 @@ static void parse_team_status(const char* json) {
 void tba_api_task(void *pvParameters) {
     printf("TBA TASK: Started on Core %d\n", xPortGetCoreID());
 
-    // 1. Configure cJSON to use PSRAM
+    // 1. Check PSRAM
+    size_t freePsram = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+    printf("TBA TASK: PSRAM Free: %d bytes\n", (int)freePsram);
+
     cJSON_Hooks hooks = { .malloc_fn = psram_malloc, .free_fn = psram_free };
     cJSON_InitHooks(&hooks);
 
-    // 2. Allocate Buffer in PSRAM
+    // 2. Allocate Buffer
     ResponseData buf;
-    buf.capacity = JSON_BUF_SIZE;
-    buf.data = (char*)psram_malloc(buf.capacity);
-    buf.len = 0;
+    buf.data = (char*)heap_caps_malloc(PSRAM_BUF_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
 
-    if (!buf.data) {
-        printf("TBA TASK: PSRAM Alloc Failed. Retrying with Internal RAM (24KB)...\n");
-        buf.capacity = 24 * 1024;
+    if (buf.data) {
+        buf.capacity = PSRAM_BUF_SIZE;
+        printf("TBA TASK: Using PSRAM Buffer (%d bytes)\n", buf.capacity);
+    } else {
+        printf("TBA TASK: PSRAM Alloc Failed! Fallback to Internal RAM (%d bytes)\n", INTERNAL_BUF_SIZE);
+        buf.capacity = INTERNAL_BUF_SIZE;
         buf.data = (char*)malloc(buf.capacity);
     }
+    buf.len = 0;
 
     if (!buf.data) {
         printf("TBA TASK: CRITICAL - Failed to allocate buffer!\n");
         vTaskDelete(NULL);
     }
-    printf("TBA TASK: Allocated %d bytes buffer (PSRAM preferred).\n", buf.capacity);
 
     while (1) {
-        // Check WiFi
         esp_netif_ip_info_t ip_info;
         esp_netif_t* netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
 
@@ -302,7 +304,7 @@ void tba_api_task(void *pvParameters) {
 
             vTaskDelay(pdMS_TO_TICKS(2000));
 
-            // 2. Fetch Team Status (Rank & Alliance)
+            // 2. Fetch Team Status
             std::string statusUrl = std::string(TBA_URL_BASE) + "/team/" + teamKey + "/event/" + eventKey + "/status";
             buf.len = 0;
             if(buf.data) buf.data[0] = 0;
@@ -311,13 +313,13 @@ void tba_api_task(void *pvParameters) {
                 if (buf.data) parse_team_status(buf.data);
             }
 
-            vTaskDelay(pdMS_TO_TICKS(120000)); // 2 mins
+            vTaskDelay(pdMS_TO_TICKS(120000));
 
         } else {
             printf("TBA: Waiting for WiFi...\n");
             vTaskDelay(pdMS_TO_TICKS(5000));
         }
     }
-    if (buf.data) free(buf.data); // Use free() since psram_free just calls free
+    if (buf.data) free(buf.data);
     vTaskDelete(NULL);
 }
