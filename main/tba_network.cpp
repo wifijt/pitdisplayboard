@@ -6,6 +6,7 @@
 #include "esp_crt_bundle.h"
 #include "esp_wifi.h"
 #include "esp_log.h"
+#include "esp_heap_caps.h" // Required for PSRAM
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include <stdio.h>
@@ -23,14 +24,28 @@
 #define TBA_KEY "YOUR_TBA_API_KEY_HERE"
 #endif
 
-// --- Fixed Buffer Strategy ---
-#define JSON_BUF_SIZE (16 * 1024)
+// --- PSRAM Buffer Strategy ---
+// 64KB fits "matches/simple" comfortably.
+#define JSON_BUF_SIZE (64 * 1024)
 
 struct ResponseData {
     char* data;
     int len;
     int capacity;
 };
+
+// --- Custom Allocator for cJSON/Buffer ---
+static void* psram_malloc(size_t size) {
+    // Try PSRAM first
+    void* ptr = heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (ptr) return ptr;
+    // Fallback to internal RAM if PSRAM unavailable/full
+    return malloc(size);
+}
+
+static void psram_free(void* ptr) {
+    free(ptr); // 'free' handles both heap regions in ESP-IDF
+}
 
 // --- HTTP Event Handler ---
 static esp_err_t _http_event_handler(esp_http_client_event_t *evt) {
@@ -80,7 +95,6 @@ static int fetch_url(const char* url, ResponseData* outBuf) {
 
 // --- Parse All Matches ---
 static void parse_all_matches(const char* json) {
-    // Safety check for empty JSON
     if (json == NULL || strlen(json) < 2) return;
 
     cJSON *root = cJSON_Parse(json);
@@ -97,14 +111,13 @@ static void parse_all_matches(const char* json) {
     int count = cJSON_GetArraySize(root);
     printf("TBA: Found %d matches\n", count);
 
-    // Direct Static Array Update
     if (matchDataMutex != NULL) {
         if (xSemaphoreTake(matchDataMutex, pdMS_TO_TICKS(2000)) == pdTRUE) {
             matchCount = 0; // Reset counter
 
             for (int i = 0; i < count && i < MAX_MATCHES; i++) {
                 cJSON *m = cJSON_GetArrayItem(root, i);
-                MatchData* md = &allMatches[matchCount]; // Point to static slot
+                MatchData* md = &allMatches[matchCount];
                 memset(md, 0, sizeof(MatchData));
 
                 cJSON *key = cJSON_GetObjectItem(m, "key");
@@ -168,11 +181,9 @@ static void parse_all_matches(const char* json) {
                         }
                     }
                 }
-                matchCount++; // Commit match
+                matchCount++;
             }
 
-            // Sort in place
-            // std::sort with raw pointers works for C-arrays
             std::sort(allMatches, allMatches + matchCount, [](const MatchData& a, const MatchData& b) {
                 return a.actual_time < b.actual_time;
             });
@@ -251,18 +262,27 @@ static void parse_team_status(const char* json) {
 void tba_api_task(void *pvParameters) {
     printf("TBA TASK: Started on Core %d\n", xPortGetCoreID());
 
-    // FIXED BUFFER STRATEGY: 16KB
-    // Reduced from 48KB to save heap for cJSON/Vector
+    // 1. Configure cJSON to use PSRAM
+    cJSON_Hooks hooks = { .malloc_fn = psram_malloc, .free_fn = psram_free };
+    cJSON_InitHooks(&hooks);
+
+    // 2. Allocate Buffer in PSRAM
     ResponseData buf;
-    buf.data = (char*)malloc(JSON_BUF_SIZE);
     buf.capacity = JSON_BUF_SIZE;
+    buf.data = (char*)psram_malloc(buf.capacity);
     buf.len = 0;
 
     if (!buf.data) {
-        printf("TBA TASK: CRITICAL - Failed to allocate %d bytes!\n", JSON_BUF_SIZE);
+        printf("TBA TASK: PSRAM Alloc Failed. Retrying with Internal RAM (24KB)...\n");
+        buf.capacity = 24 * 1024;
+        buf.data = (char*)malloc(buf.capacity);
+    }
+
+    if (!buf.data) {
+        printf("TBA TASK: CRITICAL - Failed to allocate buffer!\n");
         vTaskDelete(NULL);
     }
-    printf("TBA TASK: Allocated %d bytes buffer.\n", buf.capacity);
+    printf("TBA TASK: Allocated %d bytes buffer (PSRAM preferred).\n", buf.capacity);
 
     while (1) {
         // Check WiFi
@@ -298,6 +318,6 @@ void tba_api_task(void *pvParameters) {
             vTaskDelay(pdMS_TO_TICKS(5000));
         }
     }
-    if (buf.data) free(buf.data);
+    if (buf.data) free(buf.data); // Use free() since psram_free just calls free
     vTaskDelete(NULL);
 }
