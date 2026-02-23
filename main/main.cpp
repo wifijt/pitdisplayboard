@@ -235,6 +235,10 @@ extern "C" void app_main(void) {
     mxconfig.latch_blanking = 4;
     mxconfig.i2sspeed = HUB75_I2S_CFG::HZ_8M;
 
+    // --- MEMORY OPTIMIZATION: Disable Double Buffering ---
+    // Saves 64KB Internal RAM (128KB -> 64KB)
+    mxconfig.double_buff = false;
+
     matrix = new MatrixPanel_I2S_DMA(mxconfig);
     if (matrix->begin()) {
         matrix->setBrightness8(60);
