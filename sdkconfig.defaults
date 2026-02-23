@@ -6,5 +6,8 @@ CONFIG_SPIRAM_TYPE_AUTO=y
 CONFIG_SPIRAM_MODE_OCT=y
 CONFIG_SPIRAM_SPEED_80M=y
 
+# Allow stacks in external memory (Critical for OOM fix)
+CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY=y
+
 # Increase default HTTP buffer to support larger headers if needed
 CONFIG_ESP_HTTP_CLIENT_ENABLE_HTTPS=y

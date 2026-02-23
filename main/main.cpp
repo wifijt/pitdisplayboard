@@ -17,6 +17,7 @@
 #include "esp_netif_sntp.h"
 #include "lwip/apps/sntp.h"
 #include "esp_timer.h"
+#include "esp_heap_caps.h" // For heap_caps_malloc
 #include "wifi_provisioning/manager.h"
 #include "wifi_provisioning/scheme_ble.h"
 
@@ -71,6 +72,11 @@ uint32_t winStartTime = 0;
 // Event Schedule
 std::string nextEventName = "";
 time_t nextEventDate = 0;
+
+// Static Task Structures for PSRAM
+#define TBA_STACK_SIZE 12288
+static StackType_t *tbaStack = NULL;
+static StaticTask_t tbaTaskBuffer;
 
 // Button Handling
 #define DEBOUNCE_TIME 200 // ms
@@ -236,13 +242,33 @@ extern "C" void app_main(void) {
         setup_networking();
         printf("Networking Initialized. Creating Tasks...\n");
 
+        // Task 1: Matrix Display (Default Internal Stack 8KB)
         BaseType_t res1 = xTaskCreatePinnedToCore(matrix_task, "matrix_task", 8192, NULL, 10, NULL, 1);
-        if (res1 != pdPASS) printf("ERROR: Failed to create matrix_task!\n");
+        if (res1 != pdPASS) printf("ERROR: Failed to create matrix_task! Heap Free: %d\n", (int)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
         else printf("Created matrix_task.\n");
 
-        BaseType_t res2 = xTaskCreatePinnedToCore(tba_api_task, "tba_api_task", 12288, NULL, 5, NULL, 1); // Increased stack to 12KB
-        if (res2 != pdPASS) printf("ERROR: Failed to create tba_api_task!\n");
-        else printf("Created tba_api_task.\n");
+        // Task 2: TBA API (Manual PSRAM Stack 12KB)
+        tbaStack = (StackType_t*)heap_caps_malloc(TBA_STACK_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (tbaStack) {
+            TaskHandle_t hTba = xTaskCreateStaticPinnedToCore(
+                tba_api_task,
+                "tba_api_task",
+                TBA_STACK_SIZE,
+                NULL,
+                5,
+                tbaStack,
+                &tbaTaskBuffer,
+                1
+            );
+
+            if (hTba == NULL) printf("ERROR: Failed to create tba_api_task (Static)!\n");
+            else printf("Created tba_api_task (Static Stack in PSRAM).\n");
+        } else {
+            printf("ERROR: Failed to allocate PSRAM Stack for TBA! Fallback to Internal...\n");
+            BaseType_t res2 = xTaskCreatePinnedToCore(tba_api_task, "tba_api_task", 12288, NULL, 5, NULL, 1);
+            if (res2 != pdPASS) printf("ERROR: Failed to create tba_api_task (Internal Fallback)!\n");
+        }
+
     } else {
         printf("ERROR: Matrix Begin Failed!\n");
     }
