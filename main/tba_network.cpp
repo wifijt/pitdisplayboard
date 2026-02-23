@@ -260,6 +260,7 @@ static void parse_team_status(const char* json) {
 // --- Main Task ---
 void tba_api_task(void *pvParameters) {
     printf("TBA TASK: Started on Core %d\n", xPortGetCoreID());
+    fflush(stdout); // Force output
 
     // 1. Check PSRAM
     size_t freePsram = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);

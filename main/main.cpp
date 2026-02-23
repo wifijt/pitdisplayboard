@@ -232,8 +232,18 @@ extern "C" void app_main(void) {
     matrix = new MatrixPanel_I2S_DMA(mxconfig);
     if (matrix->begin()) {
         matrix->setBrightness8(60);
+        printf("Matrix Initialized. Setting up Networking...\n");
         setup_networking();
-        xTaskCreatePinnedToCore(matrix_task, "matrix_task", 8192, NULL, 10, NULL, 1);
-        xTaskCreatePinnedToCore(tba_api_task, "tba_api_task", 10240, NULL, 5, NULL, 1);
+        printf("Networking Initialized. Creating Tasks...\n");
+
+        BaseType_t res1 = xTaskCreatePinnedToCore(matrix_task, "matrix_task", 8192, NULL, 10, NULL, 1);
+        if (res1 != pdPASS) printf("ERROR: Failed to create matrix_task!\n");
+        else printf("Created matrix_task.\n");
+
+        BaseType_t res2 = xTaskCreatePinnedToCore(tba_api_task, "tba_api_task", 12288, NULL, 5, NULL, 1); // Increased stack to 12KB
+        if (res2 != pdPASS) printf("ERROR: Failed to create tba_api_task!\n");
+        else printf("Created tba_api_task.\n");
+    } else {
+        printf("ERROR: Matrix Begin Failed!\n");
     }
 }
