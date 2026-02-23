@@ -17,9 +17,13 @@
 #include "esp_netif_sntp.h"
 #include "lwip/apps/sntp.h"
 #include "esp_timer.h"
-#include "esp_heap_caps.h" // For heap_caps_malloc
+#include "esp_heap_caps.h"
 #include "wifi_provisioning/manager.h"
 #include "wifi_provisioning/scheme_ble.h"
+
+// --- Brownout Fix Includes ---
+#include "soc/soc.h"
+#include "soc/rtc_cntl_reg.h"
 
 #include "config.h"
 #include "globals.h"
@@ -205,6 +209,10 @@ void setup_networking() {
 }
 
 extern "C" void app_main(void) {
+    // --- BROWNOUT FIX ---
+    // Disable brownout detector to prevent crash during high current startup
+    WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);
+
     matchDataMutex = xSemaphoreCreateMutex();
 
     // Check Config
@@ -241,7 +249,7 @@ extern "C" void app_main(void) {
 
     matrix = new MatrixPanel_I2S_DMA(mxconfig);
     if (matrix->begin()) {
-        matrix->setBrightness8(60);
+        matrix->setBrightness8(20); // Reduced brightness for safety
         printf("Matrix Initialized. Setting up Networking...\n");
         setup_networking();
         printf("Networking Initialized. Creating Tasks...\n");
