@@ -11,3 +11,6 @@ CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY=y
 
 # Increase default HTTP buffer to support larger headers if needed
 CONFIG_ESP_HTTP_CLIENT_ENABLE_HTTPS=y
+
+# Disable Brownout Detector (Fix for high-current startup)
+CONFIG_ESP_BROWNOUT_DET=n
