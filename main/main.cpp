@@ -210,8 +210,11 @@ void setup_networking() {
 
 extern "C" void app_main(void) {
     // --- BROWNOUT FIX ---
-    // Disable brownout detector to prevent crash during high current startup
     WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);
+
+    // --- STABILIZATION DELAY ---
+    // Allow power rails to stabilize before high current draw
+    vTaskDelay(pdMS_TO_TICKS(2000));
 
     matchDataMutex = xSemaphoreCreateMutex();
 
@@ -244,13 +247,16 @@ extern "C" void app_main(void) {
     mxconfig.i2sspeed = HUB75_I2S_CFG::HZ_8M;
 
     // --- MEMORY OPTIMIZATION: Disable Double Buffering ---
-    // Saves 64KB Internal RAM (128KB -> 64KB)
     mxconfig.double_buff = false;
 
     matrix = new MatrixPanel_I2S_DMA(mxconfig);
     if (matrix->begin()) {
-        matrix->setBrightness8(20); // Reduced brightness for safety
+        matrix->setBrightness8(20);
         printf("Matrix Initialized. Setting up Networking...\n");
+
+        // --- STAGGERED STARTUP ---
+        vTaskDelay(pdMS_TO_TICKS(1000));
+
         setup_networking();
         printf("Networking Initialized. Creating Tasks...\n");
 
