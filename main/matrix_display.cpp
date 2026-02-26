@@ -666,6 +666,10 @@ void matrix_task(void *pvParameters) {
                 else matrix->drawPixel(x, y, 0);
             }
         }
+
+        // Manual cache flush for PSRAM performance optimization
+        matrix->flushCache();
+
         vTaskDelay(pdMS_TO_TICKS(25));
     }
 }

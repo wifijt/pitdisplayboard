@@ -705,6 +705,12 @@ public:
     dma_bus.dma_transfer_stop();
   }
 
+  /**
+   * Manually flush cache for PSRAM buffers.
+   * Call this after drawing a full frame if per-pixel cache flush is disabled.
+   */
+  void flushCache();
+
   // ------- PROTECTED -------
   // those might be useful for child classes, like VirtualMatrixPanel
 protected:

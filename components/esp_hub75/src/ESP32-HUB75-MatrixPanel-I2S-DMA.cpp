@@ -457,11 +457,29 @@ void IRAM_ATTR MatrixPanel_I2S_DMA::updateMatrixDMABuffer(uint16_t x_coord, uint
     p[x_coord] |= RGB_output_bits; // set new RGB bits
 
 #if defined(SPIRAM_DMA_BUFFER)
-    Cache_WriteBack_Addr((uint32_t)&p[x_coord], sizeof(ESP32_I2S_DMA_STORAGE_TYPE));
+    // Cache_WriteBack_Addr((uint32_t)&p[x_coord], sizeof(ESP32_I2S_DMA_STORAGE_TYPE));
 #endif
 
   } while (colour_depth_idx); // end of colour depth loop (8)
 } // updateMatrixDMABuffer (specific co-ords change)
+
+void MatrixPanel_I2S_DMA::flushCache()
+{
+#if defined(SPIRAM_DMA_BUFFER)
+    // Flush the entire framebuffer range if using PSRAM
+    // We iterate over all allocated rows/bitplanes and flush them.
+    // Ideally we would flush one contiguous block if allocated that way, but it's row-based.
+
+    // Determine active buffer
+    int buff_id = (m_cfg.double_buff) ? back_buffer_id : 0;
+
+    for (const auto& ptr : frame_buffer[buff_id].rowBits) {
+        if (ptr && ptr->data) {
+             Cache_WriteBack_Addr((uint32_t)ptr->data, ptr->getColorDepthSize(false));
+        }
+    }
+#endif
+}
 
 
 /* Update the entire buffer with a single specific colour - quicker */
