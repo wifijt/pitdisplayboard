@@ -20,11 +20,7 @@
 #include "esp_heap_caps.h"
 #include "wifi_provisioning/manager.h"
 #include "wifi_provisioning/scheme_ble.h"
-#include "esp_pm.h" // For power management
-
-// --- Brownout Fix Includes ---
-#include "soc/soc.h"
-#include "soc/rtc_cntl_reg.h"
+#include "esp_pm.h"
 
 #include "config.h"
 #include "globals.h"
@@ -106,7 +102,6 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
         printf("WiFi Disconnected. Reconnecting...\n");
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
-        // Fix for undefined IP2CO2IP macro, using correct IP2STR
         printf("Got IP: " IPSTR "\n", IP2STR(&event->ip_info.ip));
     }
 }
@@ -210,17 +205,8 @@ void setup_networking() {
 }
 
 extern "C" void app_main(void) {
-    // --- BROWNOUT FIX ---
-    WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);
-
-    // --- HARDWARE POWER FIX ---
-    // Manually force Matrix OE (GPIO 14) HIGH to disable output immediately.
-    // This prevents LEDs from turning on randomly during boot and drawing massive current.
-    gpio_reset_pin(GPIO_NUM_14);
-    gpio_set_direction(GPIO_NUM_14, GPIO_MODE_OUTPUT);
-    gpio_set_level(GPIO_NUM_14, 1);
-
     // --- STABILIZATION DELAY ---
+    // Kept to allow power rails to stabilize
     vTaskDelay(pdMS_TO_TICKS(2000));
 
     matchDataMutex = xSemaphoreCreateMutex();
