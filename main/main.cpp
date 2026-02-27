@@ -7,6 +7,7 @@
 #include <time.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
 #include "driver/gpio.h"
 #include "ESP32-HUB75-MatrixPanel-I2S-DMA.h"
 #include "Adafruit_GFX.h"
@@ -16,8 +17,10 @@
 #include "esp_netif_sntp.h"
 #include "lwip/apps/sntp.h"
 #include "esp_timer.h"
+#include "esp_heap_caps.h"
 #include "wifi_provisioning/manager.h"
 #include "wifi_provisioning/scheme_ble.h"
+#include "esp_pm.h"
 
 #include "config.h"
 #include "globals.h"
@@ -26,24 +29,35 @@
 #include "tba_network.h"
 #include "matrix_display.h"
 
+// --- Fallback Configuration ---
+#ifndef REAL_TEAM
+#define REAL_TEAM "frc5459"
+#endif
+#ifndef REAL_EVENT
+#define REAL_EVENT "2026marea"
+#endif
+
 // --- Global Variable Definitions ---
 std::vector<std::string> tickerQueue;
 
+// Static Array Implementation
+MatchData allMatches[MAX_MATCHES];
+int matchCount = 0;
+
+SemaphoreHandle_t matchDataMutex = NULL;
+MatchPhase currentPhase = PHASE_QUALS;
+
+// Simulation State
+SimState simState = {false, 0, 0};
+std::string teamKey = REAL_TEAM;
+std::string eventKey = REAL_EVENT;
+
+// Rank and Alliance
+int currentRank = 0;
+std::string allianceName = "";
+
 MatrixPanel_I2S_DMA *matrix = nullptr;
 GFXcanvas16 *canvas_dev = new GFXcanvas16(256, 64);
-
-GameScore matchHistory[12];
-int matchesCompleted = 0;
-
-MatchEntry schedule[3] = {
-    {'Q', 42, 0xF800, 0}, // Next
-    {'Q', 51, 0x001F, 0}, // Following
-    {'Q', 68, 0xF800, 0}  // Final scheduled
-};
-
-int currentlyPlaying = 39;
-
-LastMatchData lastMatch = {38, 124, 110, true, 3}; // Initialized with mock data
 
 // Pac-Man Game State
 float pacPos = 0;
@@ -60,6 +74,37 @@ uint32_t winStartTime = 0;
 std::string nextEventName = "";
 time_t nextEventDate = 0;
 
+// Static Task Structures for PSRAM
+#define TBA_STACK_SIZE 12288
+static StackType_t *tbaStack = NULL;
+static StaticTask_t tbaTaskBuffer;
+
+// Button Handling
+#define DEBOUNCE_TIME 200 // ms
+uint32_t lastBtnPressTime = 0;
+
+time_t get_current_time() {
+    time_t now;
+    time(&now);
+    if (simState.active) {
+        return now + simState.time_offset;
+    }
+    return now;
+}
+
+static void wifi_event_handler(void* arg, esp_event_base_t event_base,
+                               int32_t event_id, void* event_data) {
+    if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
+        esp_wifi_connect();
+    } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
+        // Endless retry loop
+        esp_wifi_connect();
+        printf("WiFi Disconnected. Reconnecting...\n");
+    } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
+        ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
+        printf("Got IP: " IPSTR "\n", IP2STR(&event->ip_info.ip));
+    }
+}
 
 void setup_networking() {
     // 1. Initialize NVS (Required for WiFi storage)
@@ -70,12 +115,16 @@ void setup_networking() {
     }
     ESP_ERROR_CHECK(ret);
 
-    // 2. THE AP RESET (GPIO 7 - Down Button)
-    // We do this BEFORE starting WiFi so we can wipe the slate clean
+    // 2. Buttons (GPIO 6 & 7)
+    // GPIO 7 is Down/Reset, GPIO 6 is Up
     gpio_reset_pin(GPIO_NUM_7);
     gpio_set_direction(GPIO_NUM_7, GPIO_MODE_INPUT);
     gpio_set_pull_mode(GPIO_NUM_7, GPIO_PULLUP_ONLY);
     
+    gpio_reset_pin(GPIO_NUM_6);
+    gpio_set_direction(GPIO_NUM_6, GPIO_MODE_INPUT);
+    gpio_set_pull_mode(GPIO_NUM_6, GPIO_PULLUP_ONLY);
+
     // 3. Init Network Stack
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
@@ -84,6 +133,19 @@ void setup_networking() {
 
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+
+    // Register Event Handler for Auto-Reconnect
+    ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT,
+                                                        ESP_EVENT_ANY_ID,
+                                                        &wifi_event_handler,
+                                                        NULL,
+                                                        NULL));
+    ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT,
+                                                        IP_EVENT_STA_GOT_IP,
+                                                        &wifi_event_handler,
+                                                        NULL,
+                                                        NULL));
+
 
     // 4. Define Hardcoded Credentials
     wifi_config_t static_wifi_config = {};
@@ -107,7 +169,7 @@ void setup_networking() {
         esp_wifi_set_mode(WIFI_MODE_STA);
         esp_wifi_set_config(WIFI_IF_STA, &static_wifi_config);
         esp_wifi_start();
-        esp_wifi_connect();
+        // connect is handled by event handler now
 
         // Wait 10 seconds to see if hardcoded works
         int retry = 0;
@@ -132,7 +194,7 @@ void setup_networking() {
         wifi_prov_mgr_stop_provisioning();
         esp_wifi_set_mode(WIFI_MODE_STA);
         esp_wifi_start();
-        esp_wifi_connect();
+        // connect is handled by event handler
     }
 
     // 6. Time Sync
@@ -143,6 +205,30 @@ void setup_networking() {
 }
 
 extern "C" void app_main(void) {
+    // --- STABILIZATION DELAY ---
+    // Kept to allow power rails to stabilize
+    vTaskDelay(pdMS_TO_TICKS(2000));
+
+    matchDataMutex = xSemaphoreCreateMutex();
+
+    // Check Config
+    #ifdef SIMULATION_MODE
+        if (SIMULATION_MODE) {
+            simState.active = true;
+            // Fallback for SIM constants if not defined
+            #ifndef SIM_TEAM
+            #define SIM_TEAM "frc88"
+            #endif
+            #ifndef SIM_EVENT
+            #define SIM_EVENT "2026week0"
+            #endif
+
+            teamKey = SIM_TEAM;
+            eventKey = SIM_EVENT;
+            printf("Running in SIMULATION MODE: %s @ %s\n", teamKey.c_str(), eventKey.c_str());
+        }
+    #endif
+
     HUB75_I2S_CFG mxconfig(64, 64, 4);
     mxconfig.gpio.r1 = 42; mxconfig.gpio.g1 = 41; mxconfig.gpio.b1 = 40;
     mxconfig.gpio.r2 = 38; mxconfig.gpio.g2 = 39; mxconfig.gpio.b2 = 37;
@@ -152,13 +238,49 @@ extern "C" void app_main(void) {
     mxconfig.clkphase = false;
     mxconfig.latch_blanking = 4;
     mxconfig.i2sspeed = HUB75_I2S_CFG::HZ_8M;
-    addMatchResult(12, 15, 15, 45, 30, 5, 156, true, true);  // Great game
-    addMatchResult(24, 8, 0, 32, 20, 15, 98, false, false); // Rough game
+
+    // --- MEMORY OPTIMIZATION: Disable Double Buffering ---
+    mxconfig.double_buff = false;
+
     matrix = new MatrixPanel_I2S_DMA(mxconfig);
     if (matrix->begin()) {
-        matrix->setBrightness8(60);
+        matrix->setBrightness8(20);
+        printf("Matrix Initialized. Setting up Networking...\n");
+
+        // --- STAGGERED STARTUP ---
+        vTaskDelay(pdMS_TO_TICKS(1000));
+
         setup_networking();
-        xTaskCreatePinnedToCore(matrix_task, "matrix_task", 8192, NULL, 10, NULL, 1);
-        xTaskCreatePinnedToCore(tba_api_task, "tba_api_task", 10240, NULL, 5, NULL, 1);
+        printf("Networking Initialized. Creating Tasks...\n");
+
+        // Task 1: Matrix Display (Default Internal Stack 8KB)
+        BaseType_t res1 = xTaskCreatePinnedToCore(matrix_task, "matrix_task", 8192, NULL, 10, NULL, 1);
+        if (res1 != pdPASS) printf("ERROR: Failed to create matrix_task! Heap Free: %d\n", (int)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+        else printf("Created matrix_task.\n");
+
+        // Task 2: TBA API (Manual PSRAM Stack 12KB)
+        tbaStack = (StackType_t*)heap_caps_malloc(TBA_STACK_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (tbaStack) {
+            TaskHandle_t hTba = xTaskCreateStaticPinnedToCore(
+                tba_api_task,
+                "tba_api_task",
+                TBA_STACK_SIZE,
+                NULL,
+                5,
+                tbaStack,
+                &tbaTaskBuffer,
+                1
+            );
+
+            if (hTba == NULL) printf("ERROR: Failed to create tba_api_task (Static)!\n");
+            else printf("Created tba_api_task (Static Stack in PSRAM).\n");
+        } else {
+            printf("ERROR: Failed to allocate PSRAM Stack for TBA! Fallback to Internal...\n");
+            BaseType_t res2 = xTaskCreatePinnedToCore(tba_api_task, "tba_api_task", 12288, NULL, 5, NULL, 1);
+            if (res2 != pdPASS) printf("ERROR: Failed to create tba_api_task (Internal Fallback)!\n");
+        }
+
+    } else {
+        printf("ERROR: Matrix Begin Failed!\n");
     }
 }

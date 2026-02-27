@@ -12,6 +12,11 @@
 // #include <Arduino.h>
 #include "platforms/platform_detect.hpp"
 
+// --- FIX: Force PSRAM for DMA Buffer if SPIRAM is enabled in SDK ---
+#if defined(CONFIG_SPIRAM)
+    #define SPIRAM_DMA_BUFFER
+#endif
+
 #ifdef USE_GFX_LITE
   // Slimmed version of Adafruit GFX + FastLED: https://github.com/mrcodetastic/GFX_Lite
   #include "GFX_Lite.h" 
@@ -553,17 +558,6 @@ public:
       vlineDMA(x, y, h, r, g, b);
     else
       hlineDMA(x, y, w, r, g, b);
-
-  }
-  // rgb888 overload
-  virtual inline void drawFastHLine(int16_t x, int16_t y, int16_t w, uint8_t r, uint8_t g, uint8_t b)
-  {
-    int16_t h = 1;
-    transform(x, y, w, h);
-    if (h > w)
-      vlineDMA(x, y, h, r, g, b);
-    else
-      hlineDMA(x, y, w, r, g, b);
   };
 
   /**
@@ -710,6 +704,12 @@ public:
     // i2s_parallel_stop_dma(ESP32_I2S_DEVICE);
     dma_bus.dma_transfer_stop();
   }
+
+  /**
+   * Manually flush cache for PSRAM buffers.
+   * Call this after drawing a full frame if per-pixel cache flush is disabled.
+   */
+  void flushCache();
 
   // ------- PROTECTED -------
   // those might be useful for child classes, like VirtualMatrixPanel

@@ -1,0 +1,16 @@
+# Enable PSRAM (SPIRAM) for ESP32-S3
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_BOOT_INIT=y
+CONFIG_SPIRAM_USE_MALLOC=y
+CONFIG_SPIRAM_TYPE_AUTO=n
+CONFIG_SPIRAM_MODE_QUAD=y
+CONFIG_SPIRAM_SPEED_80M=y
+
+# Allow stacks in external memory (Critical for OOM fix)
+CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY=y
+
+# Increase default HTTP buffer to support larger headers if needed
+CONFIG_ESP_HTTP_CLIENT_ENABLE_HTTPS=y
+
+# Disable Brownout Detector (Fix for high-current startup)
+CONFIG_ESP_BROWNOUT_DET=n
