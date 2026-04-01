@@ -26,30 +26,24 @@ SPONSOR_LIST = [
 
 class MatrixDisplay:
     def __init__(self, width=256, height=64, chain=4, parallel=1):
+        import numpy as np
         try:
-            from adafruit_blinka_raspberry_pi5_piomatter import Adafruit_RGBMatrix
-            # Setup Adafruit Triple LED Matrix Bonnet
-            # The exact pins will depend on the bonnet and library, assuming default bonnet pins
-            import board
-            self.matrix = Adafruit_RGBMatrix(
-                width=width, height=height, bit_depth=4,
-                rgb_pins=[board.D5, board.D13, board.D6, board.D21, board.D20, board.D19],
-                addr_pins=[board.D22, board.D23, board.D24, board.D25, board.D12],
-                clock_pin=board.D17, latch_pin=board.D26, output_enable_pin=board.D4)
-        except ImportError:
+            from adafruit_blinka_raspberry_pi5_piomatter import PioMatter, Colorspace, Pinout, Geometry
+            # For 64 rows, usually it is 1/32 scan (5 address lines)
+            addr_lines = 5
+            self.geometry = Geometry(width, height, addr_lines)
+            # RGB888 is packed as 32-bit (4 bytes per pixel)
+            self.framebuffer = np.zeros((height, width, 4), dtype=np.uint8)
+            # You can change Pinout to AdafruitMatrixHat or AdafruitMatrixBonnet based on hardware
+            # Note: PioMatter will fail to init in non-pi environments due to /dev/pio missing
             try:
-                from rgbmatrix import RGBMatrix, RGBMatrixOptions
-                options = RGBMatrixOptions()
-                options.rows = height
-                options.cols = width // chain
-                options.chain_length = chain
-                options.parallel = parallel
-                options.hardware_mapping = 'regular'
-                options.drop_privileges = False
-                self.matrix = RGBMatrix(options=options)
-            except ImportError:
-                print("Warning: No matrix library found. Running in headless mode.")
+                self.matrix = PioMatter(Colorspace.RGB888, Pinout.AdafruitMatrixBonnet, self.framebuffer, self.geometry)
+            except RuntimeError as e:
+                print(f"Warning: Failed to init PioMatter (are you on a Pi 5?): {e}")
                 self.matrix = None
+        except ImportError:
+            print("Warning: adafruit_blinka_raspberry_pi5_piomatter not installed. Running in headless mode.")
+            self.matrix = None
 
         # We will render onto a PIL Image and then draw it to the matrix
         # This makes it easier to do complex text and shapes
@@ -367,8 +361,9 @@ class MatrixDisplay:
 
         # Draw the canvas to the matrix
         if self.matrix:
-            if hasattr(self.matrix, 'SetImage'):
-                self.matrix.SetImage(self.canvas)
-            elif hasattr(self.matrix, 'display'):
-                # For adafruit_blinka_raspberry_pi5_piomatter we might need to convert Image to RGB
-                self.matrix.display(self.canvas)
+            # For PioMatter, copy PIL Image (RGB) to the numpy framebuffer (RGBX)
+            # PIL Image returns shape (height, width, 3)
+            rgb_data = np.array(self.canvas)
+            # Place RGB into framebuffer, leave 4th channel 0
+            self.framebuffer[:, :, :3] = rgb_data
+            self.matrix.show()
