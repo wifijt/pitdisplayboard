@@ -1,0 +1,5 @@
+adafruit-blinka-raspberry-pi5-piomatter
+requests
+pillow
+cffi
+numpy
