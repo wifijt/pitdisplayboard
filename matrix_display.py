@@ -1,5 +1,6 @@
 import math
 import time
+import numpy as np
 try:
     from rgbmatrix import RGBMatrix, RGBMatrixOptions, graphics
 except ImportError:
@@ -37,7 +38,7 @@ class MatrixDisplay:
             # You can change Pinout to AdafruitMatrixHat or AdafruitMatrixBonnet based on hardware
             # Note: PioMatter will fail to init in non-pi environments due to /dev/pio missing
             try:
-                self.matrix = PioMatter(Colorspace.RGB888, Pinout.AdafruitMatrixBonnet, self.framebuffer, self.geometry)
+                self.matrix = PioMatter(Colorspace.RGB888, Pinout.Active3, self.framebuffer, self.geometry)
             except RuntimeError as e:
                 print(f"Warning: Failed to init PioMatter (are you on a Pi 5?): {e}")
                 self.matrix = None
@@ -92,9 +93,9 @@ class MatrixDisplay:
         # Since standard fonts might not be available, we load default PIL font or simple ones
         # For a real implementation, you'd load actual .ttf files
         try:
-            self.font_large = ImageFont.truetype("DejaVuSans-Bold.ttf", 18)
-            self.font_medium = ImageFont.truetype("DejaVuSans-Bold.ttf", 12)
-            self.font_small = ImageFont.truetype("DejaVuSans.ttf", 9)
+            self.font_large = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 18)
+            self.font_medium = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 12)
+            self.font_small = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 9)
             self.font_tiny = ImageFont.load_default()
         except:
             self.font_large = ImageFont.load_default()
