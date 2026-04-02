@@ -1,6 +1,5 @@
 import math
 import time
-import numpy as np
 try:
     from rgbmatrix import RGBMatrix, RGBMatrixOptions, graphics
 except ImportError:
@@ -93,9 +92,9 @@ class MatrixDisplay:
         # Since standard fonts might not be available, we load default PIL font or simple ones
         # For a real implementation, you'd load actual .ttf files
         try:
-            self.font_large = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 18)
-            self.font_medium = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 12)
-            self.font_small = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 9)
+            self.font_large = ImageFont.truetype("DejaVuSans-Bold.ttf", 18)
+            self.font_medium = ImageFont.truetype("DejaVuSans-Bold.ttf", 12)
+            self.font_small = ImageFont.truetype("DejaVuSans.ttf", 9)
             self.font_tiny = ImageFont.load_default()
         except:
             self.font_large = ImageFont.load_default()
